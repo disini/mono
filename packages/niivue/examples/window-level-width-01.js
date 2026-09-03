@@ -7,7 +7,9 @@ console.log('Available packages:', typeof NiiVue, typeof runDcm2niix)
 
 let gMin = 0
 let gMax = 1
-let windowUpdatePending = false
+let windowUpdateTimer = null
+let windowUpdateInFlight = false
+let pendingWindow = null
 
 function dataRange(v) {
   let lo = v.globalMin ?? v.global_min
@@ -59,23 +61,34 @@ function updateSliderValues() {
 
 function applyWindow() {
   if (nv1.volumes.length < 1) return
-  const v = nv1.volumes[0]
   const level = parseFloat(levelSlider.value)
   const width = parseFloat(widthSlider.value)
-  const calMin = level - width / 2
-  const calMax = level + width / 2
-  v.calMin = calMin
-  v.calMax = calMax
+  pendingWindow = {
+    calMin: level - width / 2,
+    calMax: level + width / 2,
+  }
 
-  // Coalesce rapid slider events into one GPU update per animation frame.
-  // Calling async setVolume() for every input event can queue many expensive
-  // updates and make the image appear to refresh only after dragging stops.
-  if (!windowUpdatePending) {
-    windowUpdatePending = true
-    requestAnimationFrame(async () => {
-      windowUpdatePending = false
-      await nv1.updateGLVolume()
-    })
+  scheduleWindowUpdate()
+}
+
+function scheduleWindowUpdate() {
+  if (windowUpdateTimer !== null || windowUpdateInFlight) return
+  windowUpdateTimer = window.setTimeout(() => {
+    windowUpdateTimer = null
+    flushWindowUpdate()
+  }, 33)
+}
+
+async function flushWindowUpdate() {
+  if (pendingWindow === null || nv1.volumes.length < 1) return
+  const nextWindow = pendingWindow
+  pendingWindow = null
+  windowUpdateInFlight = true
+  try {
+    await nv1.setVolume(0, nextWindow)
+  } finally {
+    windowUpdateInFlight = false
+    if (pendingWindow !== null) scheduleWindowUpdate()
   }
 }
 
@@ -211,6 +224,11 @@ widthSlider.addEventListener('input', () => {
 // Reset to full range
 resetBtn.addEventListener('click', () => {
   if (nv1.volumes.length < 1) return
+  pendingWindow = null
+  if (windowUpdateTimer !== null) {
+    clearTimeout(windowUpdateTimer)
+    windowUpdateTimer = null
+  }
   nv1.setVolume(0, { calMin: gMin, calMax: gMax })
 
   // Update sliders
