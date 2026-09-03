@@ -115,7 +115,9 @@ console.log('UI elements check:', {
 const nv1 = new NiiVue({
   isColorbarVisible: true,
   backgroundColor: [0.1, 0.1, 0.1, 1],
-  showRender: SHOW_RENDER.ALWAYS,
+  // Temporarily disable the 3D render tile in the multiplanar layout.
+  // showRender: SHOW_RENDER.ALWAYS,
+  showRender: SHOW_RENDER.NEVER,
 })
 
 nv1.addEventListener('locationChange', (e) => handleLocationChange(e.detail))
