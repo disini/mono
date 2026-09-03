@@ -49,7 +49,6 @@ function initSliders(v) {
 
   levelSlider.disabled = false
   widthSlider.disabled = false
-  autoBtn.disabled = false
   resetBtn.disabled = false
 }
 
@@ -95,7 +94,6 @@ const levelSlider = document.getElementById('levelSlider')
 const widthSlider = document.getElementById('widthSlider')
 const levelValue = document.getElementById('levelValue')
 const widthValue = document.getElementById('widthValue')
-const autoBtn = document.getElementById('autoBtn')
 const resetBtn = document.getElementById('resetBtn')
 const statusEl = document.getElementById('status')
 const loadingEl = document.getElementById('loading')
@@ -208,69 +206,6 @@ levelSlider.addEventListener('input', () => {
 widthSlider.addEventListener('input', () => {
   updateSliderValues()
   applyWindow()
-})
-
-// Auto window (Otsu threshold + 99.5th percentile)
-autoBtn.addEventListener('click', async () => {
-  if (nv1.volumes.length < 1) return
-  const v = nv1.volumes[0]
-  const img = v.img
-  const slope = v.hdr?.scl_slope || 1
-  const inter = v.hdr?.scl_inter || 0
-  const BINS = 256
-  const h = new Float64Array(BINS)
-  const scale = (BINS - 1) / (gMax - gMin || 1)
-  const stride = Math.max(1, Math.floor(img.length / 2e6))
-  let n = 0
-  for (let i = 0; i < img.length; i += stride) {
-    const x = img[i] * slope + inter
-    const b = Math.min(BINS - 1, Math.max(0, ((x - gMin) * scale) | 0))
-    h[b]++
-    n++
-  }
-
-  let sumAll = 0
-  for (let i = 0; i < BINS; i++) sumAll += i * h[i]
-  let sumB = 0
-  let wB = 0
-  let best = 0
-  let bestVar = -1
-  for (let t = 0; t < BINS; t++) {
-    wB += h[t]
-    if (wB === 0) continue
-    const wF = n - wB
-    if (wF === 0) break
-    sumB += t * h[t]
-    const mB = sumB / wB
-    const mF = (sumAll - sumB) / wF
-    const between = wB * wF * (mB - mF) * (mB - mF)
-    if (between > bestVar) {
-      bestVar = between
-      best = t
-    }
-  }
-
-  let acc = 0
-  let p995 = BINS - 1
-  for (let i = 0; i < BINS; i++) {
-    acc += h[i]
-    if (acc >= n * 0.995) {
-      p995 = i
-      break
-    }
-  }
-
-  const calMin = gMin + (best / (BINS - 1)) * (gMax - gMin)
-  const calMax = gMin + (p995 / (BINS - 1)) * (gMax - gMin)
-
-  nv1.setVolume(0, { calMin, calMax })
-
-  // Update sliders to match
-  const level = (calMin + calMax) / 2
-  const width = calMax - calMin
-  levelSlider.value = Math.round(level)
-  widthSlider.value = Math.round(width)
-  updateSliderValues()
 })
 
 // Reset to full range
