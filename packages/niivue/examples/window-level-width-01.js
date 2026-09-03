@@ -76,7 +76,7 @@ function scheduleWindowUpdate() {
   windowUpdateTimer = window.setTimeout(() => {
     windowUpdateTimer = null
     flushWindowUpdate()
-  }, 33)
+  }, 16)
 }
 
 async function flushWindowUpdate() {
@@ -157,7 +157,8 @@ if (!canvasEl) {
   try {
     await nv1.attachToCanvas(canvasEl)
     console.log('Actual rendering backend:', nv1.backend)
-    console.log('WebGPU available:', 'gpu' in navigator)
+    const webgpuAdapter = await navigator.gpu?.requestAdapter()
+    console.log('WebGPU adapter available:', !!webgpuAdapter)
     // Enable DICOM input after attach succeeds
     dicomInput.disabled = false
     statusEl.textContent = 'Ready - Select DICOM folder'
