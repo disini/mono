@@ -1,3 +1,5 @@
+// @ts-check
+
 import NiiVue, { SHOW_RENDER } from '../src/index.ts'
 import { runDcm2niix } from '@niivue/nv-ext-dcm2niix'
 
@@ -10,6 +12,12 @@ let gMax = 1
 let windowUpdateTimer = null
 let windowUpdateInFlight = false
 let pendingWindow = null
+let windowUpdateStats = {
+  startedAt: performance.now(),
+  count: 0,
+  totalMs: 0,
+  maxMs: 0,
+}
 
 function dataRange(v) {
   let lo = v.globalMin ?? v.global_min
@@ -76,7 +84,7 @@ function scheduleWindowUpdate() {
   windowUpdateTimer = window.setTimeout(() => {
     windowUpdateTimer = null
     flushWindowUpdate()
-  }, 16)
+  }, 8)
 }
 
 async function flushWindowUpdate() {
@@ -84,9 +92,33 @@ async function flushWindowUpdate() {
   const nextWindow = pendingWindow
   pendingWindow = null
   windowUpdateInFlight = true
+  const startedAt = performance.now()
   try {
     await nv1.setVolume(0, nextWindow)
   } finally {
+    const elapsedMs = performance.now() - startedAt
+    windowUpdateStats.count += 1
+    windowUpdateStats.totalMs += elapsedMs
+    windowUpdateStats.maxMs = Math.max(windowUpdateStats.maxMs, elapsedMs)
+    const statsElapsedMs = performance.now() - windowUpdateStats.startedAt
+    if (statsElapsedMs >= 1000) {
+      console.log('Window update performance:', {
+        updatesPerSecond: Math.round(
+          (windowUpdateStats.count * 1000) / statsElapsedMs,
+        ),
+        averageMs: Number(
+          (windowUpdateStats.totalMs / windowUpdateStats.count).toFixed(2),
+        ),
+        maxMs: Number(windowUpdateStats.maxMs.toFixed(2)),
+        backend: nv1.backend,
+      })
+      windowUpdateStats = {
+        startedAt: performance.now(),
+        count: 0,
+        totalMs: 0,
+        maxMs: 0,
+      }
+    }
     windowUpdateInFlight = false
     if (pendingWindow !== null) scheduleWindowUpdate()
   }
@@ -123,6 +155,7 @@ console.log('UI elements check:', {
 })
 
 // Initialize NiiVue
+// /** @type {import('../src/NVControl.ts').default} */
 const nv1 = new NiiVue({
   isColorbarVisible: true,
   backgroundColor: [0.1, 0.1, 0.1, 1],
