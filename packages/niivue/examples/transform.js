@@ -32,7 +32,7 @@ const toMat = (rows) =>
 const rad = (d) => (d * Math.PI) / 180
 
 // world-space T = translate(t) * about pivot( Rx Ry Rz S )
-function buildT() {
+function buildTransform() {
   const [t, r, s] = values
   const m = mat4.fromTranslation(
     mat4.create(),
@@ -47,7 +47,11 @@ function buildT() {
 }
 
 async function apply() {
-  const m = mat4.multiply(mat4.create(), buildT(), toMat(state[vol].original))
+  const m = mat4.multiply(
+    mat4.create(),
+    buildTransform(),
+    toMat(state[vol].original),
+  )
   await nv1.setVolumeAffine(vol, toRows(m))
   document.getElementById('dials').textContent = DIALS.map(
     (d, i) => `${d.name}: ${values[i].map(d.fmt).join(', ')}`,
