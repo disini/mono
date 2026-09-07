@@ -12,7 +12,7 @@ import type { BuildLineFn, LineData } from './NVLine'
 
 // ---------- Types ----------
 
-type ScreenInfo = { mnMM: vec3; mxMM: vec3; fovMM: vec3 }
+export type ScreenInfo = { mnMM: vec3; mxMM: vec3; fovMM: vec3 }
 
 export type SliceTile = {
   leftTopWidthHeight?: number[]

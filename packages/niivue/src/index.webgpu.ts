@@ -232,6 +232,9 @@ export type { FontMetrics } from './view/NVFont'
 export type { FrameReport } from './view/NVPerfMarks'
 // Base class every render entity extends; SlideRenderer's public supertype
 export { NVRenderer } from './view/NVRenderer'
+// Screen-space projection, for placing external overlays over the 2D tiles
+export type { ScreenInfo, SliceTile } from './view/NVSliceLayout'
+export { projectMMToCanvas } from './view/sliceUtils'
 // Crosshair-focused multi-resolution (multi-LOD) streamed volumes
 export type {
   ChunkedVolumeFetch,
