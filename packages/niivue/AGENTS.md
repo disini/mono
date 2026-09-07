@@ -334,18 +334,21 @@ touches `src/index.ts` and no other entry point as a defect until shown otherwis
 
 ### The only sanctioned differences
 
-`src/index.webgl2.ts` and `src/index.webgpu.ts` are the same file apart from two
-lines, the header comment and the default export:
+`src/index.webgl2.ts` and `src/index.webgpu.ts` are the same file apart from
+three lines: the header comment, the backend's own slide renderer, and the
+default export.
 
 ```bash
 diff src/index.webgl2.ts src/index.webgpu.ts
-# exactly two hunks:
+# exactly three hunks:
 #   the 'WebGL2-only distribution' header comment vs 'WebGPU-only'
+#   export { SlideRenderer } from './gl/slide'
+#                             vs   { SlideRendererGPU } from './wgpu/slide'
 #   export { default, default as NiiVue } from './NVControlWebGL2'
 #                                          vs   './NVControlWebGPU'
 ```
 
-A third hunk is a bug. That diff is the cheapest pre-push check there is.
+A fourth hunk is a bug. That diff is the cheapest pre-push check there is.
 
 Against the root entry, the one sanctioned omission is the **`*Detail` event
 payload types** re-exported from `./NVEvents` (`VolumeLoadedDetail`,
@@ -354,8 +357,14 @@ root entry exports belongs in both backend entries as well.
 
 ### Checking a branch
 
-Names the root entry exports that the backend entries do not, ignoring the
-sanctioned `*Detail` omission:
+`src/entryPoints.test.ts` asserts all of this and runs in the normal `bun test`
+target, so ordinary CI catches the drift now. It checks four things: the two
+backend entries differ only by their own slide renderer; neither exports a name
+the root entry lacks; nothing but `*Detail` types and the other backend's
+renderer is root-only; and every `*Detail` type `NVEvents.ts` declares is
+exported from root.
+
+By hand, the same question:
 
 ```bash
 names() {
@@ -366,30 +375,28 @@ names() {
 diff <(names src/index.ts) <(names src/index.webgl2.ts) | grep '^<' | grep -v 'Detail$'
 ```
 
-Nothing should ever come back on the `>` side: a symbol in a backend entry but
-not in root means the universal build cannot reach its own feature.
+### Keeping the three files in step
 
-### Known drift
+The backend entries are a mechanical function of the root entry: root, minus the
+`*Detail` names, with the header comment, the slide-renderer line and the default
+export swapped. Edit `src/index.ts` first and mirror the change into both backend
+files; the test above will tell you if you missed one.
 
-The rule above is the policy, not yet a description of the tree. As of
-2026-09-07 the root entry exports 68 non-`*Detail` names that neither backend
-entry has: the slide/WSI subsystem, several `NVTypes` annotation types,
-`lookupColorMap` / `makeLabelLut`, `writeVolume`, `NVWorker` and others. They
-accumulated one PR at a time for exactly the reason this section now exists.
-Re-run the check above for the current list rather than trusting that count.
+### The single-backend distributions are not backend-isolated
 
-Two calls are still open and should be settled before anyone bulk-fixes the
-drift:
+Separate from the export policy, and worth knowing before reasoning about what a
+subpath "costs": `dist/niivue.webgl2.js` and `dist/niivue.webgpu.js` currently
+share three of their five chunks, including the 1.83 MB one that holds both
+backends. The path is `NVControlBase.ts` -> `control/viewBoth.ts` -> both
+`gl/NVViewGL.ts` and `wgpu/NVViewGPU.ts` (`control/interactions.ts`,
+`control/viewWebGL2.ts` and `control/viewWebGPU.ts` reach it the same way), a
+static import that no entry point can tree-shake away. So the subpaths today
+select a default export, not a smaller bundle. The slide renderers *are* split
+per backend, because the entry point should not be the thing that cements the
+leak.
 
-- The non-`*Detail` names from `./NVEvents` (`NVEventMap`, `NVEventListener`,
-  `NVEventTarget`, `VolumeUpdatedChanges`) are root-only today. Either they
-  join the backend entries, or the exception widens to "the whole `./NVEvents`
-  module is root-only". Right now they read as drift under the stated rule.
-- `SlideRenderer` (`./gl/slide`) and `SlideRendererGPU` (`./wgpu/slide`) are
-  root-only and are genuinely backend-specific. If they are exposed at all, each
-  belongs in its own backend entry. That would be the first sanctioned
-  asymmetry between `index.webgl2.ts` and `index.webgpu.ts`, and it would cost
-  the two-hunk diff check above.
+Tracked as https://github.com/niivue/mono/issues/175, with the cause and the fix
+written up there. Delete this section when it lands.
 
 ## Code style and conventions
 

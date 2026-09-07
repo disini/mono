@@ -70,6 +70,7 @@ export type {
   AnnotationRemovedDetail,
   AzimuthElevationChangeDetail,
   CanvasResizeDetail,
+  ClickToSegmentDetail,
   ClipPlaneChangeDetail,
   ColormapAddedDetail,
   DrawingChangedDetail,
@@ -83,6 +84,7 @@ export type {
   NVEventMap,
   NVEventTarget,
   PenValueChangedDetail,
+  PerfFrameDetail,
   PointerUpDetail,
   PropertyChangeDetail,
   SignalLoadedDetail,
@@ -91,6 +93,7 @@ export type {
   SliceTypeChangeDetail,
   ViewAttachedDetail,
   VolumeLoadedDetail,
+  VolumeOrderChangedDetail,
   VolumeRemovedDetail,
   VolumeUpdatedChanges,
   VolumeUpdatedDetail,
@@ -103,37 +106,51 @@ export type {
   AnnotationPoint,
   AnnotationScreenShape,
   AnnotationStats,
+  AnnotationStyle,
   AnnotationTool,
   BackendType,
   CanvasViewport,
   ColorMap,
+  CompletedAngle,
+  CompletedMeasurement,
   CustomLayoutTile,
   DragReleaseInfo,
   ImageFromUrlOptions,
   LodCompensationLevel,
   LodCompensationReport,
+  LUT,
   MeasurementScreenLine,
   MeshFromUrlOptions,
+  MeshKind,
   MeshLayerFromUrlOptions,
   MeshUpdate,
   MrsVolumeMeta,
   NIFTI1,
   NIFTI2,
+  NIFTIHeader,
   NiiVueLocation,
   NiiVueLocationValue,
   NiiVueOptions,
   NVBounds,
+  NVConnectomeData,
+  NVConnectomeEdge,
+  NVConnectomeNode,
   NVConnectomeOptions,
   NVFontData,
   NVGlobalCamera,
   NVImage,
   NVInstance,
   NVMesh,
+  NVMeshData,
   NVMeshLayer,
   NVSignal,
   NVSignalDisplay,
+  NVSignalPhysioRaw,
   NVSignalRaw,
+  NVSignalSpectroscopyRaw,
+  NVTractData,
   NVTractOptions,
+  PolygonWithHoles,
   SaveVolumeOptions,
   SignalAnnotation,
   SignalAxis,
@@ -142,6 +159,7 @@ export type {
   SignalSidecar,
   SignalSpectrumMode,
   SyncOpts,
+  TractScalarMeta,
   TypedVoxelArray,
   VectorAnnotation,
   ViewHitTest,
@@ -165,6 +183,7 @@ export {
   type PpmBandOptions,
   phaseCorrection,
   ppmRefForNucleus,
+  type SignalPlot,
 } from './signal/processing'
 export type { DziDescriptor } from './slide/dziSource'
 export {
@@ -197,7 +216,11 @@ export type {
 } from './slide/NVSlide'
 export { ManifestRangeSource, NVSlide } from './slide/NVSlide'
 export { SlideDrawing } from './slide/slideDrawing'
-export type { SlidePlaneTile } from './slide/slidePlane'
+export type {
+  AxialPlaneOptions,
+  SlidePlaneTile,
+  Vec3 as SlideVec3,
+} from './slide/slidePlane'
 export { axialPlaneTransform, slidePlaneTiles } from './slide/slidePlane'
 export type { SlideVectorKind, SlideVectorShape } from './slide/slideVector'
 export { SlideVectorLayer } from './slide/slideVector'
@@ -231,6 +254,12 @@ export type {
   UIKitOverlayFrame,
   UIKitOverlayRenderer,
 } from './view/NVOverlayHook'
+// Font atlas metrics: the shape of NVFontData.metrics
+export type { FontMetrics } from './view/NVFont'
+// Per-frame render timing: the payload of PerfFrameDetail
+export type { FrameReport } from './view/NVPerfMarks'
+// Base class every render entity extends; SlideRenderer's public supertype
+export { NVRenderer } from './view/NVRenderer'
 // Crosshair-focused multi-resolution (multi-LOD) streamed volumes
 export type {
   ChunkedVolumeFetch,
@@ -277,12 +306,16 @@ export { buildDerivedScalarVolume, isMrsiVolume } from './volume/mrsi'
 // Budget plans: the policy that shapes a streamed volume's octree
 export {
   type BudgetPlan,
+  type BudgetPlanContext,
   type BudgetPlanName,
   type BudgetPlanOptions,
   type BudgetPlanSpec,
   BUDGET_PLANS,
   resolveBudgetPlan,
+  type ResolvedOptions as ResolvedBudgetOptions,
 } from './volume/budgetPlans'
+// Decoded image, for a caller supplying its own `decodeImage`
+export type { DecodedImage } from './volume/imageDecode'
 export {
   type ChunkedVolumeOptions,
   NVChunkedVolume,
@@ -383,6 +416,7 @@ export {
   type TiffImage,
   tiffImageDescription,
   tiffResolutionMm,
+  type TiffTagValue,
 } from './volume/tiff'
 export {
   describeTiff,
@@ -407,6 +441,8 @@ export type {
 } from './volume/transforms'
 // Volume utilities for extensions
 export { extractVoxelFid, getImageDataRAS } from './volume/utils'
+// Volume writer options: the third argument to writeVolume
+export type { VolumeWriteOptions } from './volume/writers'
 export { SlideRendererGPU } from './wgpu/slide'
 // Worker bridge for external transform packages
 export { NVWorker } from './workers/NVWorker'
