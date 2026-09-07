@@ -18,6 +18,23 @@ let windowUpdateStats = {
   totalMs: 0,
   maxMs: 0,
 }
+const pendingWindowCpuMeasurements = []
+
+// Wait until the GPU has completed the frame associated with a perf report.
+// This is intentionally used only by the diagnostic logger: forcing a GPU
+// wait removes CPU/GPU overlap and should not be enabled in a normal viewer.
+async function waitForGpuCompletion() {
+  const view = nv1.view
+  const startedAt = performance.now()
+
+  if (nv1.backend === 'webgpu' && view?.device) {
+    await view.device.queue.onSubmittedWorkDone()
+  } else if (nv1.backend === 'webgl2' && view?.gl) {
+    view.gl.finish()
+  }
+
+  return performance.now() - startedAt
+}
 
 function dataRange(v) {
   let lo = v.globalMin ?? v.global_min
@@ -94,9 +111,11 @@ async function flushWindowUpdate() {
   windowUpdateInFlight = true
   const startedAt = performance.now()
   try {
+    nv1.perf.tagFrame('window-level')
     await nv1.setVolume(0, nextWindow)
   } finally {
     const elapsedMs = performance.now() - startedAt
+    pendingWindowCpuMeasurements.push(elapsedMs)
     windowUpdateStats.count += 1
     windowUpdateStats.totalMs += elapsedMs
     windowUpdateStats.maxMs = Math.max(windowUpdateStats.maxMs, elapsedMs)
@@ -164,6 +183,30 @@ const nv1 = new NiiVue({
   showRender: SHOW_RENDER.NEVER,
 })
 
+// Report the tagged render frame that follows each window update.
+nv1.perf.enabled = true
+nv1.addEventListener('perfFrame', (e) => {
+  const report = e.detail
+  if (report.tag !== 'window-level') return
+  const setVolumeCpuMs = pendingWindowCpuMeasurements.shift() ?? 0
+
+  void (async () => {
+    const gpuExecutionAndWaitMs = await waitForGpuCompletion()
+    const rendererCpuMs = report.cpuMs
+    const gpuSubmitJsMs = report.submitMs
+    console.log('Window update timing (CPU + GPU completion):', {
+      cpuUpdateMs: Number(setVolumeCpuMs.toFixed(2)),
+      rendererCpuMs: Number(rendererCpuMs.toFixed(2)),
+      gpuSubmitJsMs: Number(gpuSubmitJsMs.toFixed(2)),
+      gpuExecutionAndCompletionWaitMs: Number(gpuExecutionAndWaitMs.toFixed(2)),
+      endToEndCpuPlusGpuMs: Number(
+        (setVolumeCpuMs + report.totalMs + gpuExecutionAndWaitMs).toFixed(2),
+      ),
+      backend: nv1.backend,
+    })
+  })()
+})
+
 nv1.addEventListener('locationChange', (e) => handleLocationChange(e.detail))
 
 // Listen for volume loaded events for better status updates
@@ -219,7 +262,10 @@ dicomInput.addEventListener('change', async () => {
     // Convert DICOM to NIfTI
     const niftiFiles = await runDcm2niix(files)
     console.timeEnd('dcm2niix')
-    console.log('Generated NIfTI files:', niftiFiles.map(f => f.name))
+    console.log(
+      'Generated NIfTI files:',
+      niftiFiles.map((f) => f.name),
+    )
 
     if (niftiFiles.length === 0) {
       throw new Error('No NIfTI files generated from DICOM')
@@ -289,7 +335,9 @@ canvasContainer.addEventListener('drop', async (e) => {
   const files = []
   if (e.dataTransfer && e.dataTransfer.items) {
     try {
-      const { traverseDataTransferItems } = await import('@niivue/nv-ext-dcm2niix')
+      const { traverseDataTransferItems } = await import(
+        '@niivue/nv-ext-dcm2niix'
+      )
       const droppedFiles = await traverseDataTransferItems(e.dataTransfer.items)
       files.push(...droppedFiles)
     } catch {
@@ -314,6 +362,6 @@ canvasContainer.addEventListener('drop', async (e) => {
 // Helper to create a FileList-like object
 function createFileList(files) {
   const dataTransfer = new DataTransfer()
-  files.forEach(file => dataTransfer.items.add(file))
+  files.forEach((file) => dataTransfer.items.add(file))
   return dataTransfer.files
 }
