@@ -1,13 +1,19 @@
 import { describe, expect, test } from 'bun:test'
-import { vec3 } from 'gl-matrix'
+import { vec3, vec4 } from 'gl-matrix'
+import * as NVTransforms from '@/math/NVTransforms'
 import * as NVConstants from '@/NVConstants'
 import type NVModel from '@/NVModel'
 import {
+  type AxisWindowMM,
   crosshairRadiusMM,
   fitSlicesAndGraph,
   type SliceLayoutConfig,
   type SliceTile,
   screenSlicesLayout,
+  slicePanUV,
+  tileVisibleWindowMM,
+  type VisibleWindowMM,
+  visibleWindowMM,
 } from './NVSliceLayout'
 
 // Wide pane (2000x400) with a cube volume: a single-orientation slice is ~square
@@ -211,5 +217,196 @@ describe('isSingleViewFillCanvas', () => {
     expect(on.map((t) => t.leftTopWidthHeight)).toEqual(
       off.map((t) => t.leftTopWidthHeight),
     )
+  })
+})
+
+// ---------- visibleWindowMM ----------
+
+// Deliberately asymmetric and anisotropic: equal spans or a centre on the
+// origin hide a swapped U/V index and a dropped pan.
+const EXTENTS_MIN = vec3.fromValues(-20, -5, -40)
+const EXTENTS_MAX = vec3.fromValues(60, 25, 10)
+
+const mpr = (over: Partial<SliceLayoutConfig> = {}): SliceLayoutConfig =>
+  cfg({
+    canvasWH: [800, 600],
+    sliceType: NVConstants.SLICE_TYPE.MULTIPLANAR,
+    extentsMin: EXTENTS_MIN,
+    extentsMax: EXTENTS_MAX,
+    ...over,
+  })
+
+const win = (w: VisibleWindowMM, axis: number): AxisWindowMM => {
+  const got = w[axis]
+  if (!got) throw new Error(`axis ${axis} has no visible window`)
+  return got
+}
+
+describe('visibleWindowMM', () => {
+  test('unpannedMultiplanarIsExactlyTheDataExtents', () => {
+    const w = visibleWindowMM(screenSlicesLayout(mpr()))
+    for (const axis of [0, 1, 2]) {
+      expect(win(w, axis).minMM).toBeCloseTo(EXTENTS_MIN[axis], 9)
+      expect(win(w, axis).maxMM).toBeCloseTo(EXTENTS_MAX[axis], 9)
+    }
+  })
+
+  test('zoomNarrowsAboutTheCentreAndPanSlidesTheWindow', () => {
+    const tiles = screenSlicesLayout(mpr())
+    const plain = visibleWindowMM(tiles)
+    const zoomed = visibleWindowMM(tiles, [0, 0, 0, 4])
+    const panned = visibleWindowMM(tiles, [7, -3, 11, 4])
+    for (const axis of [0, 1, 2]) {
+      const p = win(plain, axis)
+      const z = win(zoomed, axis)
+      const centre = (p.minMM + p.maxMM) / 2
+      expect(z.maxMM - z.minMM).toBeCloseTo((p.maxMM - p.minMM) / 4, 9)
+      expect((z.minMM + z.maxMM) / 2).toBeCloseTo(centre, 9)
+      // Pan is a world-mm offset of the window, so the span is untouched and
+      // the centre moves by -pan.
+      const q = win(panned, axis)
+      expect(q.maxMM - q.minMM).toBeCloseTo(z.maxMM - z.minMM, 9)
+      expect((q.minMM + q.maxMM) / 2).toBeCloseTo(centre - [7, -3, 11][axis], 9)
+    }
+  })
+
+  test('radiologicalMirrorsTheScreenButNotTheWorldWindow', () => {
+    // The convention negates the ortho bounds AND panU, so what is on screen
+    // swaps sides while the mm interval it covers is identical. A helper that
+    // "handled" radiological would be wrong here.
+    const pan = [7, -3, 11, 2]
+    const neuro = visibleWindowMM(screenSlicesLayout(mpr()), pan)
+    const radio = visibleWindowMM(
+      screenSlicesLayout(mpr({ isRadiologicalConvention: true })),
+      pan,
+    )
+    expect(radio).toEqual(neuro)
+  })
+
+  test('matchesWhatTheMvpActuallyProjects', () => {
+    // The claim the helper makes: its window edges are the edges of the tile.
+    // Push them through the same matrix the renderer builds and they must land
+    // on the clip-space border.
+    const IDX = [
+      [0, 1, 2],
+      [0, 2, 1],
+      [1, 2, 0],
+    ]
+    for (const isRadiological of [false, true]) {
+      const tiles = screenSlicesLayout(
+        mpr({ isRadiologicalConvention: isRadiological }),
+      )
+      const pan = [7, -3, 11, 2.5]
+      for (const tile of tiles) {
+        const map = IDX[tile.axCorSag]
+        if (!map) continue
+        const w = tileVisibleWindowMM(tile, pan)
+        if (!w) throw new Error('2D tile returned no window')
+        const [mvp] = NVTransforms.calculateMvpMatrix2D(
+          tile.leftTopWidthHeight as number[],
+          Array.from((tile.screen as { mnMM: vec3 }).mnMM),
+          Array.from((tile.screen as { mxMM: vec3 }).mxMM),
+          Infinity,
+          undefined,
+          tile.azimuth as number,
+          tile.elevation as number,
+          isRadiological,
+          undefined,
+          undefined,
+          slicePanUV(pan, tile.axCorSag),
+        )
+        const u = win(w, map[0])
+        const v = win(w, map[1])
+        // Depth mid-range keeps the sample inside near/far.
+        const depth = (EXTENTS_MIN[map[2]] + EXTENTS_MAX[map[2]]) / 2
+        for (const [uMM, vMM] of [
+          [u.minMM, v.minMM],
+          [u.maxMM, v.maxMM],
+        ]) {
+          const world = [0, 0, 0]
+          world[map[0]] = uMM
+          world[map[1]] = vMM
+          world[map[2]] = depth
+          const clip = vec4.create()
+          vec4.transformMat4(
+            clip,
+            vec4.fromValues(world[0], world[1], world[2], 1),
+            mvp,
+          )
+          expect(Math.abs(clip[0] / clip[3])).toBeCloseTo(1, 6)
+          expect(Math.abs(clip[1] / clip[3])).toBeCloseTo(1, 6)
+        }
+      }
+    }
+  })
+
+  test('depthOnlyAxesStayNull', () => {
+    // A sagittal tile shows a plane at one X, not a range of X. Reporting a
+    // zero-width window there would let a caller mistake it for a thin slab.
+    const sag = mpr({
+      sliceType: NVConstants.SLICE_TYPE.SAGITTAL,
+      isSingleViewFillCanvas: false,
+    })
+    const w = visibleWindowMM(screenSlicesLayout(sag))
+    expect(w[0]).toBeNull()
+    expect(win(w, 1).minMM).toBeCloseTo(EXTENTS_MIN[1], 9)
+    expect(win(w, 2).maxMM).toBeCloseTo(EXTENTS_MAX[2], 9)
+  })
+
+  test('reportsTheOrthoWindowNotTheData', () => {
+    // A filled single view keeps the image scale and grows the window into the
+    // margin, so the visible mm reach past the volume. Documented, and the
+    // reason callers wanting the visible DATA have to intersect themselves.
+    const sag = mpr({ sliceType: NVConstants.SLICE_TYPE.SAGITTAL })
+    const boxed = visibleWindowMM(
+      screenSlicesLayout({ ...sag, isSingleViewFillCanvas: false }),
+    )
+    const filled = visibleWindowMM(screenSlicesLayout(sag))
+    // fillScreen rebuilds the bounds from a float32 centre, so compare with a
+    // tolerance rather than exactly.
+    const eps = 1e-4
+    let widened = 0
+    for (const axis of [1, 2]) {
+      const f = win(filled, axis)
+      const b = win(boxed, axis)
+      expect(f.minMM).toBeLessThanOrEqual(b.minMM + eps)
+      expect(f.maxMM).toBeGreaterThanOrEqual(b.maxMM - eps)
+      // Centre holds: filling eats margin, it does not slide the image.
+      expect((f.minMM + f.maxMM) / 2).toBeCloseTo((b.minMM + b.maxMM) / 2, 4)
+      if (f.maxMM - f.minMM > b.maxMM - b.minMM + eps) widened++
+    }
+    // Only the axis with slack grows -- the other already spanned the pane.
+    expect(widened).toBe(1)
+  })
+
+  test('skipsRenderGlobal3dAndScreenlessTiles', () => {
+    const render = {
+      axCorSag: NVConstants.SLICE_TYPE.RENDER,
+      leftTopWidthHeight: [0, 0, 400, 400],
+    } as unknown as SliceTile
+    expect(tileVisibleWindowMM(render)).toBeNull()
+    expect(visibleWindowMM([render])).toEqual([null, null, null])
+
+    const global3d = {
+      ...screenSlicesLayout(mpr())[0],
+      space: 'global3d',
+    } as SliceTile
+    expect(visibleWindowMM([global3d])).toEqual([null, null, null])
+
+    expect(
+      tileVisibleWindowMM({
+        axCorSag: NVConstants.SLICE_TYPE.AXIAL,
+      } as unknown as SliceTile),
+    ).toBeNull()
+  })
+
+  test('degenerateZoomFallsBackToOneToOne', () => {
+    // 0 or NaN would otherwise widen the window to infinity and poison any
+    // bounds a caller derives from it.
+    const tiles = screenSlicesLayout(mpr())
+    const plain = visibleWindowMM(tiles)
+    for (const zoom of [0, -1, Number.NaN]) {
+      expect(visibleWindowMM(tiles, [0, 0, 0, zoom])).toEqual(plain)
+    }
   })
 })

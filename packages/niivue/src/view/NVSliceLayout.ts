@@ -1042,6 +1042,107 @@ export function screenSlicePick(
   )
 }
 
+// ---------- Visible window ----------
+
+/** A world-mm interval along one world axis. */
+export type AxisWindowMM = { minMM: number; maxMM: number }
+
+/**
+ * The visible world-mm window on each world axis, indexed `[X, Y, Z]`.
+ *
+ * An axis is `null` when no tile shows a range along it -- either nothing is
+ * laid out, or every tile that touches the axis has it as its depth axis.
+ */
+export type VisibleWindowMM = [
+  AxisWindowMM | null,
+  AxisWindowMM | null,
+  AxisWindowMM | null,
+]
+
+/**
+ * World-mm window a single 2D tile currently shows, per world axis.
+ *
+ * `screen.mnMM`/`mxMM` are the tile's ortho window before interaction and are
+ * stored tile-local (`[u, v, depth]`), so this both applies the 2D pan/zoom the
+ * way {@link NVTransforms.calculateMvpMatrix2D} does -- shrink about the window
+ * centre by `zoom`, then shift by `-pan` -- and remaps the result back onto
+ * world XYZ via {@link IDX_MAP}.
+ *
+ * Radiological convention is deliberately not a parameter: it negates both the
+ * ortho bounds and `panU`, which mirrors what lands on the left of the screen
+ * but leaves the world-mm interval identical.
+ *
+ * Only the two in-plane axes get a window. The depth axis is left `null`
+ * because a slice tile shows a plane there, not a range; callers that want the
+ * slice position already have it from `tile.sliceMM` or the crosshair.
+ *
+ * @param tile - a 2D slice tile (returns null for render or non-orientation tiles)
+ * @param pan2Dxyzmm - the scene's `[panX, panY, panZ, zoom]`
+ * @returns per-world-axis windows, or null for a tile with no 2D ortho window
+ */
+export function tileVisibleWindowMM(
+  tile: SliceTile,
+  pan2Dxyzmm: ArrayLike<number> = [0, 0, 0, 1],
+): VisibleWindowMM | null {
+  const map = IDX_MAP[tile.axCorSag]
+  if (!map || !tile.screen) return null
+  const { mnMM, mxMM } = tile.screen
+  const pan = slicePanUV(pan2Dxyzmm, tile.axCorSag)
+  // A zero or non-finite zoom would blow the window up to infinity; treat it
+  // the same 1:1 way the MVP does.
+  const zoom = Number.isFinite(pan[2]) && pan[2] > 0 ? pan[2] : 1
+  const out: VisibleWindowMM = [null, null, null]
+  for (let i = 0; i < 2; i++) {
+    const centre = (mnMM[i] + mxMM[i]) / 2 - pan[i]
+    const half = Math.abs(mxMM[i] - mnMM[i]) / (2 * zoom)
+    if (!Number.isFinite(centre) || !Number.isFinite(half)) continue
+    out[map[i]] = { minMM: centre - half, maxMM: centre + half }
+  }
+  return out
+}
+
+/**
+ * Union of every 2D tile's visible window, per world axis.
+ *
+ * The answer to "which world mm are on screen right now" for a whole layout:
+ * a standard multiplanar returns all three axes, a sagittal-only layout returns
+ * Y and Z with X `null`. The window is the ortho window, so it can reach past
+ * the data -- a tile filling the canvas has margin around the volume, and
+ * `isMultiplanarEqualSize` pads the short axes. Intersect with the volume
+ * extents yourself if you want the visible part of the data rather than of the
+ * world.
+ *
+ * `global3d` tiles are skipped along with render tiles: their window lives in
+ * instance space and would need the tile's position/scale/orientation applied
+ * before it means anything in world mm.
+ *
+ * @param tiles - the laid-out screen slices
+ * @param pan2Dxyzmm - the scene's `[panX, panY, panZ, zoom]`
+ */
+export function visibleWindowMM(
+  tiles: SliceTile[],
+  pan2Dxyzmm: ArrayLike<number> = [0, 0, 0, 1],
+): VisibleWindowMM {
+  const out: VisibleWindowMM = [null, null, null]
+  for (const tile of tiles) {
+    if (tile.space === 'global3d') continue
+    const windows = tileVisibleWindowMM(tile, pan2Dxyzmm)
+    if (!windows) continue
+    for (let axis = 0; axis < 3; axis++) {
+      const win = windows[axis]
+      if (!win) continue
+      const prev = out[axis]
+      out[axis] = prev
+        ? {
+            minMM: Math.min(prev.minMM, win.minMM),
+            maxMM: Math.max(prev.maxMM, win.maxMM),
+          }
+        : win
+    }
+  }
+  return out
+}
+
 // ---------- Cross-lines ----------
 
 export function buildCrossLines(
