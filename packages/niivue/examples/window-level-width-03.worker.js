@@ -6,6 +6,9 @@ let pendingFrameResolve = null
 let imageBaseUrl = ''
 let latestWindowMessage = null
 let processingWindow = false
+let activeFrameTiming = null
+let lastAnimationCallbackAt = null
+let animationFrameSource = 'unknown'
 
 // One active update and one replaceable pending value; never replay a backlog.
 async function drainWindowUpdates() {
@@ -16,8 +19,16 @@ async function drainWindowUpdates() {
       const message = latestWindowMessage
       latestWindowMessage = null
       try {
+        const queueWaitMs = performance.now() - message.receivedAt
         const result = await setWindow(message.window)
-        self.postMessage({ type: 'windowUpdated', sentAt: message.sentAt, result })
+        result.workerQueueWaitMs = queueWaitMs
+        // Durations stay on the worker clock; never subtract clock origins.
+        result.workerResidenceMs = performance.now() - message.receivedAt
+        self.postMessage({
+          type: 'windowUpdated',
+          sentAt: message.sentAt,
+          result,
+        })
       } catch (error) {
         pendingFrameResolve = null
         self.postMessage({ type: 'windowError', error: errorMessage(error) })
@@ -125,14 +136,35 @@ function installWorkerCanvasCompatibility(offscreenCanvas) {
   }
   if (!('requestAnimationFrame' in scope)) {
     Object.defineProperty(scope, 'requestAnimationFrame', {
+      writable: true,
+      configurable: true,
       value: (callback) =>
         setTimeout(() => callback(performance.now()), 1000 / 120),
-        // setTimeout(() => callback(performance.now()), 1000 / 240),// slower
+      // setTimeout(() => callback(performance.now()), 1000 / 240),// slower
     })
   }
   if (!('cancelAnimationFrame' in scope)) {
     Object.defineProperty(scope, 'cancelAnimationFrame', {
       value: (handle) => clearTimeout(handle),
+    })
+  }
+  // Observe the renderer's real callbacks without creating a separate RAF loop.
+  const requestFrame = scope.requestAnimationFrame.bind(scope)
+  scope.requestAnimationFrame = (callback) => {
+    const requestedAt = performance.now()
+    return requestFrame((timestamp) => {
+      const callbackAt = performance.now()
+      if (activeFrameTiming) {
+        activeFrameTiming.rafWaitTotalMs += callbackAt - requestedAt
+        activeFrameTiming.rafCount += 1
+        if (lastAnimationCallbackAt !== null) {
+          activeFrameTiming.callbackIntervalTotalMs +=
+            callbackAt - lastAnimationCallbackAt
+          activeFrameTiming.callbackIntervalCount += 1
+        }
+      }
+      lastAnimationCallbackAt = callbackAt
+      callback(timestamp)
     })
   }
   if (!('ResizeObserver' in scope)) {
@@ -203,6 +235,8 @@ async function initialize(message) {
   imageBaseUrl = message.baseUrl || ''
   canvas.width = message.width
   canvas.height = message.height
+  animationFrameSource =
+    typeof self.requestAnimationFrame === 'function' ? 'native' : 'timer-120hz'
   installWorkerCanvasCompatibility(canvas)
   installWorkerImageCompatibility(canvas)
 
@@ -243,16 +277,31 @@ async function setWindow(windowOptions) {
     pendingFrameResolve = resolve
   })
   nv.perf.tagFrame('window-level')
+  const timing = {
+    rafWaitTotalMs: 0,
+    rafCount: 0,
+    callbackIntervalTotalMs: 0,
+    callbackIntervalCount: 0,
+  }
+  activeFrameTiming = timing
   const startedAt = performance.now()
-  await nv.setVolume(0, windowOptions)
-  const workerCpuMs = performance.now() - startedAt
-  const report = await framePromise
-  return {
-    workerCpuMs,
-    renderCpuMs: report.cpuMs,
-    gpuSubmitJsMs: report.submitMs,
-    renderCpuAndSubmitMs: report.totalMs,
-    backend: nv.backend,
+  try {
+    await nv.setVolume(0, windowOptions)
+    const updatedAt = performance.now()
+    const report = await framePromise
+    return {
+      workerCpuMs: updatedAt - startedAt,
+      frameReportWaitMs: performance.now() - updatedAt,
+      ...timing,
+      animationFrameSource,
+      renderCpuMs: report.cpuMs,
+      gpuSubmitJsMs: report.submitMs,
+      renderCpuAndSubmitMs: report.totalMs,
+      backend: nv.backend,
+    }
+  } finally {
+    activeFrameTiming = null
+    pendingFrameResolve = null
   }
 }
 
@@ -267,7 +316,12 @@ function resize(width, height) {
 
 self.onmessage = (event) => {
   const message = event.data
+  if (message.type === 'resetCallbackTiming') {
+    lastAnimationCallbackAt = null
+    return
+  }
   if (message.type === 'windowLatest') {
+    message.receivedAt = performance.now()
     latestWindowMessage = message
     void drainWindowUpdates()
     return

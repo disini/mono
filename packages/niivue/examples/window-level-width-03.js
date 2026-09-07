@@ -17,6 +17,7 @@ let resizeObserver = null
 let nextWorkerRequestId = 1
 const workerRequests = new Map()
 let windowUpdateStats = createWindowUpdateStats()
+let benchmark = null
 
 const dicomInput = document.getElementById('dicomInput')
 const levelSlider = document.getElementById('levelSlider')
@@ -24,6 +25,8 @@ const widthSlider = document.getElementById('widthSlider')
 const levelValue = document.getElementById('levelValue')
 const widthValue = document.getElementById('widthValue')
 const resetBtn = document.getElementById('resetBtn')
+const benchmarkBtn = document.getElementById('benchmarkBtn')
+const benchmarkRate = document.getElementById('benchmarkRate')
 const statusEl = document.getElementById('status')
 const loadingEl = document.getElementById('loading')
 const loadingTextEl = document.getElementById('loadingText')
@@ -38,6 +41,15 @@ function createWindowUpdateStats() {
     workerCpuTotalMs: 0,
     renderCpuTotalMs: 0,
     maxRoundTripMs: 0,
+    inputCount: 0,
+    transportResidualTotalMs: 0,
+    workerResidenceTotalMs: 0,
+    workerQueueWaitTotalMs: 0,
+    frameReportWaitTotalMs: 0,
+    rafWaitTotalMs: 0,
+    rafCount: 0,
+    callbackIntervalTotalMs: 0,
+    callbackIntervalCount: 0,
   }
 }
 
@@ -74,6 +86,7 @@ function initSliders(volume) {
   levelSlider.disabled = false
   widthSlider.disabled = false
   resetBtn.disabled = false
+  benchmarkBtn.disabled = rendererMode !== 'worker'
 }
 
 function dataRange(volume) {
@@ -245,6 +258,7 @@ async function initializeRenderer() {
 
 function applyWindow() {
   if (!hasVolume) return
+  windowUpdateStats.inputCount += 1
   const level = Number(levelSlider.value)
   const width = Number(widthSlider.value)
   pendingWindow = {
@@ -280,6 +294,18 @@ function recordWindowUpdate(roundTripMs, result) {
   windowUpdateStats.roundTripTotalMs += roundTripMs
   windowUpdateStats.workerCpuTotalMs += workerCpuMs
   windowUpdateStats.renderCpuTotalMs += renderCpuMs
+  windowUpdateStats.workerResidenceTotalMs += result?.workerResidenceMs ?? 0
+  // Signed residual: clock precision can produce a small negative value.
+  windowUpdateStats.transportResidualTotalMs += result
+    ? roundTripMs - result.workerResidenceMs
+    : 0
+  windowUpdateStats.workerQueueWaitTotalMs += result?.workerQueueWaitMs ?? 0
+  windowUpdateStats.frameReportWaitTotalMs += result?.frameReportWaitMs ?? 0
+  windowUpdateStats.rafWaitTotalMs += result?.rafWaitTotalMs ?? 0
+  windowUpdateStats.rafCount += result?.rafCount ?? 0
+  windowUpdateStats.callbackIntervalTotalMs +=
+    result?.callbackIntervalTotalMs ?? 0
+  windowUpdateStats.callbackIntervalCount += result?.callbackIntervalCount ?? 0
   windowUpdateStats.maxRoundTripMs = Math.max(
     windowUpdateStats.maxRoundTripMs,
     roundTripMs,
@@ -290,7 +316,40 @@ function recordWindowUpdate(roundTripMs, result) {
   const count = windowUpdateStats.count
   console.log('Window update performance:', {
     rendererMode,
+    inputSource: benchmark ? 'automatic' : 'manual',
+    targetInputsPerSecond: benchmark?.hz ?? null,
+    animationFrameSource: result?.animationFrameSource ?? null,
     updatesPerSecond: Math.round((count * 1000) / elapsedMs),
+    inputEventsPerSecond: Math.round(
+      (windowUpdateStats.inputCount * 1000) / elapsedMs,
+    ),
+    averageTransportResidualMs: Number(
+      (windowUpdateStats.transportResidualTotalMs / count).toFixed(2),
+    ),
+    averageWorkerResidenceMs: Number(
+      (windowUpdateStats.workerResidenceTotalMs / count).toFixed(2),
+    ),
+    averageRafScheduleWaitMs: windowUpdateStats.rafCount
+      ? Number(
+          (
+            windowUpdateStats.rafWaitTotalMs / windowUpdateStats.rafCount
+          ).toFixed(2),
+        )
+      : null,
+    averageRenderCallbackIntervalMs: windowUpdateStats.callbackIntervalCount
+      ? Number(
+          (
+            windowUpdateStats.callbackIntervalTotalMs /
+            windowUpdateStats.callbackIntervalCount
+          ).toFixed(2),
+        )
+      : null,
+    averageWorkerQueueWaitMs: Number(
+      (windowUpdateStats.workerQueueWaitTotalMs / count).toFixed(2),
+    ),
+    averageFrameReportWaitMs: Number(
+      (windowUpdateStats.frameReportWaitTotalMs / count).toFixed(2),
+    ),
     averageRoundTripMs: Number(
       (windowUpdateStats.roundTripTotalMs / count).toFixed(2),
     ),
@@ -351,6 +410,7 @@ async function loadSampleFromQuery() {
 
 async function processDicomFiles(files) {
   if (files.length === 0) return
+  stopBenchmark()
   console.log(`Selected ${files.length} DICOM files`)
   try {
     setLoading(true, 'Converting DICOM to NIfTI...')
@@ -384,18 +444,97 @@ async function processDicomFiles(files) {
   }
 }
 
+// Deadline-based input generation: skip missed ticks, never send catch-up bursts.
+function startBenchmark() {
+  if (!hasVolume || rendererMode !== 'worker') return
+  const hz = Number(benchmarkRate.value)
+  benchmark = {
+    hz,
+    nextDeadline: 0,
+    startedAt: performance.now(),
+    timer: null,
+    level: levelSlider.value,
+    width: widthSlider.value,
+  }
+  benchmarkRate.disabled = true
+  windowUpdateStats = createWindowUpdateStats()
+  renderWorker?.postMessage({ type: 'resetCallbackTiming' })
+  benchmarkBtn.textContent = '停止测试'
+  const tick = () => {
+    if (!benchmark) return
+    const elapsed = performance.now() - benchmark.startedAt
+    if (elapsed >= 10000) {
+      stopBenchmark()
+      return
+    }
+    // Timers may fire before the fractional deadline. Re-arm without sending
+    // another input for the same time slot.
+    if (elapsed < benchmark.nextDeadline) {
+      benchmark.timer = setTimeout(
+        tick,
+        Math.max(1, Math.ceil(benchmark.nextDeadline - elapsed)),
+      )
+      return
+    }
+    const span = gMax - gMin || 1
+    const phase = (elapsed / 1000) * Math.PI
+    levelSlider.value = String((gMin + gMax) / 2 + Math.sin(phase) * span * 0.3)
+    widthSlider.value = String(
+      Math.max(1, span * (0.7 + 0.25 * Math.cos(phase))),
+    )
+    updateSliderValues()
+    applyWindow()
+    const nowElapsed = performance.now() - benchmark.startedAt
+    const period = 1000 / hz
+    const nextDeadline = (Math.floor(nowElapsed / period) + 1) * period
+    benchmark.nextDeadline = nextDeadline
+    benchmark.timer = setTimeout(
+      tick,
+      Math.max(1, Math.ceil(nextDeadline - nowElapsed)),
+    )
+  }
+  tick()
+}
+
+function stopBenchmark() {
+  if (!benchmark) return
+  clearTimeout(benchmark.timer)
+  levelSlider.value = benchmark.level
+  widthSlider.value = benchmark.width
+  benchmark = null
+  benchmarkRate.disabled = false
+  benchmarkBtn.textContent = '自动测试 10 秒'
+  updateSliderValues()
+  applyWindow()
+}
+
+benchmarkBtn.addEventListener('click', () => {
+  if (benchmark) stopBenchmark()
+  else startBenchmark()
+})
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopBenchmark()
+})
+
 levelSlider.addEventListener('input', () => {
+  const value = levelSlider.value
+  stopBenchmark()
+  levelSlider.value = value
   updateSliderValues()
   applyWindow()
 })
 
 widthSlider.addEventListener('input', () => {
+  const value = widthSlider.value
+  stopBenchmark()
+  widthSlider.value = value
   updateSliderValues()
   applyWindow()
 })
 
 resetBtn.addEventListener('click', () => {
   if (!hasVolume) return
+  stopBenchmark()
   pendingWindow = null
   if (windowUpdateTimer !== null) {
     clearTimeout(windowUpdateTimer)

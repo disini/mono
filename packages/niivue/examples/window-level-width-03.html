@@ -143,6 +143,15 @@
       </div>
 
       <button id="resetBtn" type="button" title="Reset to full range" disabled>Reset</button>
+      <div class="control-group">
+        <label for="benchmarkRate">自动测试目标频率</label>
+        <select id="benchmarkRate">
+          <option value="60">60 次/秒</option>
+          <option value="120">120 次/秒</option>
+          <option value="160" selected>160 次/秒</option>
+        </select>
+      </div>
+      <button id="benchmarkBtn" type="button" disabled>自动测试 10 秒</button>
 
       <div id="status">Ready</div>
     </header>
