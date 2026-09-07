@@ -382,6 +382,33 @@ The backend entries are a mechanical function of the root entry: root, minus the
 export swapped. Edit `src/index.ts` first and mirror the change into both backend
 files; the test above will tell you if you missed one.
 
+### Before removing an export
+
+An export in this package has consumers you will not find by searching
+`packages/niivue`. The extensions, `nv-ohif`, `nv-react`, `uikit`, the demo apps
+and `examples/` all import from `@niivue/niivue` by package name.
+
+Two steps, both required:
+
+```bash
+# 1. Search the whole workspace, enumerated -- never a remembered list of packages
+grep -rn '\bTheSymbol\b' --exclude-dir=node_modules --exclude-dir=dist packages apps
+
+# 2. Typecheck the dependents, not just this package
+bunx nx affected -t typecheck        # NOT --projects=niivue
+```
+
+`nx run-many`/`--projects=niivue` passes happily while a sibling package is
+broken, because the sibling's `typecheck` never runs. `nx affected` follows the
+`workspace:*` edges and catches it.
+
+This is not hypothetical. Issue #176 proposed removing five exports on the
+finding that they had no consumers. Every one of the five had a consumer:
+`NVWorker` in `nv-ext-drawing` and `nv-ext-image-processing`, `slice2DToMM` in
+`nv-ohif`, `nii2volume` in an e2e spec and a demo bundle, and the two drawing
+helpers in `examples/slides.js`. The search that missed them used a
+hand-remembered package list and a niivue-scoped gate.
+
 ### The single-backend distributions are not backend-isolated
 
 Separate from the export policy, and worth knowing before reasoning about what a
