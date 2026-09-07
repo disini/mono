@@ -4,6 +4,29 @@ let nv = null
 let canvas = null
 let pendingFrameResolve = null
 let imageBaseUrl = ''
+let latestWindowMessage = null
+let processingWindow = false
+
+// One active update and one replaceable pending value; never replay a backlog.
+async function drainWindowUpdates() {
+  if (processingWindow) return
+  processingWindow = true
+  try {
+    while (latestWindowMessage !== null) {
+      const message = latestWindowMessage
+      latestWindowMessage = null
+      try {
+        const result = await setWindow(message.window)
+        self.postMessage({ type: 'windowUpdated', sentAt: message.sentAt, result })
+      } catch (error) {
+        pendingFrameResolve = null
+        self.postMessage({ type: 'windowError', error: errorMessage(error) })
+      }
+    }
+  } finally {
+    processingWindow = false
+  }
+}
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error)
@@ -244,6 +267,11 @@ function resize(width, height) {
 
 self.onmessage = (event) => {
   const message = event.data
+  if (message.type === 'windowLatest') {
+    latestWindowMessage = message
+    void drainWindowUpdates()
+    return
+  }
   if (message.type === 'resize') {
     resize(message.width, message.height)
     return

@@ -124,6 +124,14 @@ function rejectWorkerRequests(error) {
 
 function handleWorkerMessage(event) {
   const message = event.data
+  if (message.type === 'windowUpdated') {
+    recordWindowUpdate(performance.now() - message.sentAt, message.result)
+    return
+  }
+  if (message.type === 'windowError') {
+    console.error('Window update failed:', message.error)
+    return
+  }
   if (message.type === 'location') {
     document.getElementById('location').innerHTML =
       `&nbsp;&nbsp;${message.value}`
@@ -247,6 +255,17 @@ function applyWindow() {
 }
 
 function scheduleWindowUpdate() {
+  // The worker keeps only the latest pending value while a frame is running.
+  // Sending a new value does not wait for the previous frame's reply.
+  if (rendererMode === 'worker' && renderWorker && pendingWindow !== null) {
+    renderWorker.postMessage({
+      type: 'windowLatest',
+      window: pendingWindow,
+      sentAt: performance.now(),
+    })
+    pendingWindow = null
+    return
+  }
   if (windowUpdateTimer !== null || windowUpdateInFlight) return
   windowUpdateTimer = window.setTimeout(() => {
     windowUpdateTimer = null
