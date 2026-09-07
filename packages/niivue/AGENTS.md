@@ -311,6 +311,86 @@ nv1.setVolume(0, { calMin: 40, colormap: 'hot' })
 
 Same pattern for meshes, layers, tracts, connectomes.
 
+## Entry points and public exports
+
+The package ships three hand-maintained entry points:
+
+| Subpath | File | Distribution |
+|---------|------|--------------|
+| `@niivue/niivue` | `src/index.ts` | universal (carries both backends) |
+| `@niivue/niivue/webgl2` | `src/index.webgl2.ts` | WebGL2 only |
+| `@niivue/niivue/webgpu` | `src/index.webgpu.ts` | WebGPU only |
+
+(The other `package.json` subpaths, `./viewport`, `./assets/fonts` and
+`./assets/matcaps`, point straight at a module and have no hand-written index.)
+
+**A new public export goes in all three files.** Adding it to `src/index.ts`
+alone is the standing mistake, and nothing in the toolchain catches it: the
+typecheck passes, the build passes, `dist/index.d.ts` has the symbol, and the
+docs describe it. It surfaces only downstream, when someone writes
+`import { Thing } from '@niivue/niivue/webgl2'` against a package that plainly
+documents `Thing` and gets a build error. Reviewers should read a diff that
+touches `src/index.ts` and no other entry point as a defect until shown otherwise.
+
+### The only sanctioned differences
+
+`src/index.webgl2.ts` and `src/index.webgpu.ts` are the same file apart from two
+lines, the header comment and the default export:
+
+```bash
+diff src/index.webgl2.ts src/index.webgpu.ts
+# exactly two hunks:
+#   the 'WebGL2-only distribution' header comment vs 'WebGPU-only'
+#   export { default, default as NiiVue } from './NVControlWebGL2'
+#                                          vs   './NVControlWebGPU'
+```
+
+A third hunk is a bug. That diff is the cheapest pre-push check there is.
+
+Against the root entry, the one sanctioned omission is the **`*Detail` event
+payload types** re-exported from `./NVEvents` (`VolumeLoadedDetail`,
+`ClipPlaneChangeDetail`, and the rest). Those are root-only. Everything else the
+root entry exports belongs in both backend entries as well.
+
+### Checking a branch
+
+Names the root entry exports that the backend entries do not, ignoring the
+sanctioned `*Detail` omission:
+
+```bash
+names() {
+  tr '\n' ' ' < "$1" | grep -oE 'export (type )?\{[^}]*\} from' |
+  tr -d '{}' | sed 's/export \(type \)*//;s/ from//' | tr ',' '\n' |
+  sed 's/.* as //;s/^ *type *//;s/^ *//;s/ *$//' | grep -v '^$' | sort -u
+}
+diff <(names src/index.ts) <(names src/index.webgl2.ts) | grep '^<' | grep -v 'Detail$'
+```
+
+Nothing should ever come back on the `>` side: a symbol in a backend entry but
+not in root means the universal build cannot reach its own feature.
+
+### Known drift
+
+The rule above is the policy, not yet a description of the tree. As of
+2026-09-07 the root entry exports 68 non-`*Detail` names that neither backend
+entry has: the slide/WSI subsystem, several `NVTypes` annotation types,
+`lookupColorMap` / `makeLabelLut`, `writeVolume`, `NVWorker` and others. They
+accumulated one PR at a time for exactly the reason this section now exists.
+Re-run the check above for the current list rather than trusting that count.
+
+Two calls are still open and should be settled before anyone bulk-fixes the
+drift:
+
+- The non-`*Detail` names from `./NVEvents` (`NVEventMap`, `NVEventListener`,
+  `NVEventTarget`, `VolumeUpdatedChanges`) are root-only today. Either they
+  join the backend entries, or the exception widens to "the whole `./NVEvents`
+  module is root-only". Right now they read as drift under the stated rule.
+- `SlideRenderer` (`./gl/slide`) and `SlideRendererGPU` (`./wgpu/slide`) are
+  root-only and are genuinely backend-specific. If they are exposed at all, each
+  belongs in its own backend entry. That would be the first sanctioned
+  asymmetry between `index.webgl2.ts` and `index.webgpu.ts`, and it would cost
+  the two-hunk diff check above.
+
 ## Code style and conventions
 
 Linting/formatting is **Biome**, configured in the monorepo root `biome.json`. See the root `AGENTS.md` for the full rule list; key rules enforced here:
@@ -1454,7 +1534,15 @@ Exported from `volume/utils.ts` and from the package root. Returns `Float32Array
 
 ### Public exports
 
-From package root (`src/index.ts`): `NVExtensionContext`, `computeSlicePointerEvent`, `getImageDataRAS`, and types `BackgroundVolumeAccess`, `DrawingAccess`, `DrawingDims`, `NVExtensionEventMap`, `SharedBufferHandle`, `SlicePointerEvent`.
+From all three entry points (see **Entry points and public exports**):
+`NVExtensionContext`, `getImageDataRAS`, and types `BackgroundVolumeAccess`,
+`DrawingAccess`, `DrawingDims`, `MrsVolumeAccess`, `NVExtensionEventMap`,
+`SharedBufferHandle`, `SlicePointerEvent`.
+
+`computeSlicePointerEvent` is **not** exported from any entry point. It lives in
+`extension/context.ts` and is called from `control/interactions.ts`; this section
+used to list it as public, which it never was. Either re-export it from all three
+entries or leave it internal, but the doc should not promise it.
 
 ## Web Workers
 
