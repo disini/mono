@@ -176,6 +176,7 @@ console.log('UI elements check:', {
 // Initialize NiiVue
 // /** @type {import('../src/NVControl.ts').default} */
 const nv1 = new NiiVue({
+  backend: 'webgl2',
   isColorbarVisible: true,
   backgroundColor: [0.1, 0.1, 0.1, 1],
   // Temporarily disable the 3D render tile in the multiplanar layout.
