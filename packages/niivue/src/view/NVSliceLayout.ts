@@ -1044,7 +1044,14 @@ export function screenSlicePick(
 
 // ---------- Visible window ----------
 
-/** A world-mm interval along one world axis. */
+/**
+ * A world-mm interval along one world axis.
+ *
+ * Closed at both ends: `maxMM` is the last millimetre visible, not one past it.
+ * Worth stating because the neighbouring box types disagree -- `FocusBox` is
+ * inclusive, `MultiLodBounds` is exclusive -- so a caller converting between
+ * them cannot tell which this is from the shape alone.
+ */
 export type AxisWindowMM = { minMM: number; maxMM: number }
 
 /**
@@ -1116,6 +1123,16 @@ export function tileVisibleWindowMM(
  * `isMultiplanarEqualSize` pads the short axes. Intersect with the volume
  * extents yourself if you want the visible part of the data rather than of the
  * world.
+ *
+ * A union is what a prefetcher wants: the mm a caller must have loaded to cover
+ * everything on screen. It is NOT what "keep this point visible in every tile"
+ * wants, which needs the intersection. The two coincide in every layout today,
+ * because tiles sharing a world axis are laid out from the same extents and get
+ * the same window (checked on standard and equal-size multiplanar, and on a
+ * custom layout with deliberately mismatched pane aspects). Per-tile fill would
+ * break the tie -- one tile widened, its neighbour not -- so a caller with
+ * every-tile semantics should reduce over {@link tileVisibleWindowMM} itself
+ * rather than assume this stays interchangeable.
  *
  * Render and `global3d` tiles are skipped, for the reasons on
  * {@link tileVisibleWindowMM}.
