@@ -12,6 +12,7 @@ let gMax = 1
 let windowUpdateTimer = null
 let windowUpdateInFlight = false
 let pendingWindow = null
+let benchmark = null
 let windowUpdateStats = {
   startedAt: performance.now(),
   count: 0,
@@ -81,6 +82,7 @@ function initSliders(v) {
   levelSlider.disabled = false
   widthSlider.disabled = false
   resetBtn.disabled = false
+  benchmarkBtn.disabled = false
 }
 
 function updateSliderValues() {
@@ -97,7 +99,88 @@ function applyWindow() {
     calMax: level + width / 2,
   }
 
+  // The benchmark must measure the requested input cadence, not the manual
+  // drag debounce. The normal 8 ms debounce is useful for pointer events, but
+  // combined with a 160 Hz test cadence it produces an artificial ~80 Hz
+  // completion rate by coalescing every other update.
+  if (benchmark) {
+    if (!windowUpdateInFlight) void flushWindowUpdate()
+    return
+  }
+
   scheduleWindowUpdate()
+}
+
+// Generate deterministic window updates for a fair comparison with version 03.
+function startBenchmark() {
+  if (benchmark || nv1.volumes.length < 1) return
+  const hz = Number(benchmarkRate.value)
+  benchmark = {
+    hz,
+    nextDeadline: 0,
+    startedAt: performance.now(),
+    timer: null,
+    level: levelSlider.value,
+    width: widthSlider.value,
+  }
+  benchmarkRate.disabled = true
+  benchmarkBtn.textContent = '停止测试'
+  windowUpdateStats = {
+    startedAt: performance.now(),
+    count: 0,
+    cpuUpdateTotalMs: 0,
+    rendererCpuTotalMs: 0,
+    gpuSubmitTotalMs: 0,
+    gpuWaitTotalMs: 0,
+    endToEndTotalMs: 0,
+    maxEndToEndMs: 0,
+  }
+
+  const tick = () => {
+    if (!benchmark) return
+    const elapsed = performance.now() - benchmark.startedAt
+    if (elapsed >= 10000) {
+      stopBenchmark()
+      return
+    }
+    if (elapsed < benchmark.nextDeadline) {
+      benchmark.timer = window.setTimeout(
+        tick,
+        Math.max(1, Math.ceil(benchmark.nextDeadline - elapsed)),
+      )
+      return
+    }
+
+    const span = gMax - gMin || 1
+    const phase = (elapsed / 1000) * Math.PI
+    levelSlider.value = String((gMin + gMax) / 2 + Math.sin(phase) * span * 0.3)
+    widthSlider.value = String(
+      Math.max(1, span * (0.7 + 0.25 * Math.cos(phase))),
+    )
+    updateSliderValues()
+    applyWindow()
+
+    const nowElapsed = performance.now() - benchmark.startedAt
+    const period = 1000 / hz
+    benchmark.nextDeadline = (Math.floor(nowElapsed / period) + 1) * period
+    benchmark.timer = window.setTimeout(
+      tick,
+      Math.max(1, Math.ceil(benchmark.nextDeadline - nowElapsed)),
+    )
+  }
+  tick()
+}
+
+function stopBenchmark() {
+  if (!benchmark) return
+  window.clearTimeout(benchmark.timer)
+  levelSlider.value = benchmark.level
+  widthSlider.value = benchmark.width
+  benchmark = null
+  benchmarkRate.disabled = false
+  benchmarkBtn.textContent = '自动测试 10 秒'
+  updateSliderValues()
+  applyWindow()
 }
 
 function scheduleWindowUpdate() {
@@ -121,7 +204,10 @@ async function flushWindowUpdate() {
     const elapsedMs = performance.now() - startedAt
     pendingWindowCpuMeasurements.push(elapsedMs)
     windowUpdateInFlight = false
-    if (pendingWindow !== null) scheduleWindowUpdate()
+    if (pendingWindow !== null) {
+      if (benchmark) void flushWindowUpdate()
+      else scheduleWindowUpdate()
+    }
   }
 }
 
@@ -141,6 +227,8 @@ const widthSlider = document.getElementById('widthSlider')
 const levelValue = document.getElementById('levelValue')
 const widthValue = document.getElementById('widthValue')
 const resetBtn = document.getElementById('resetBtn')
+const benchmarkRate = document.getElementById('benchmarkRate')
+const benchmarkBtn = document.getElementById('benchmarkBtn')
 const statusEl = document.getElementById('status')
 const loadingEl = document.getElementById('loading')
 const loadingTextEl = document.getElementById('loadingText')
@@ -314,11 +402,17 @@ dicomInput.addEventListener('change', async () => {
 
 // Slider events
 levelSlider.addEventListener('input', () => {
+  const value = levelSlider.value
+  stopBenchmark()
+  levelSlider.value = value
   updateSliderValues()
   applyWindow()
 })
 
 widthSlider.addEventListener('input', () => {
+  const value = widthSlider.value
+  stopBenchmark()
+  widthSlider.value = value
   updateSliderValues()
   applyWindow()
 })
@@ -326,6 +420,7 @@ widthSlider.addEventListener('input', () => {
 // Reset to full range
 resetBtn.addEventListener('click', () => {
   if (nv1.volumes.length < 1) return
+  stopBenchmark()
   pendingWindow = null
   if (windowUpdateTimer !== null) {
     clearTimeout(windowUpdateTimer)
@@ -337,6 +432,15 @@ resetBtn.addEventListener('click', () => {
   levelSlider.value = Math.round((gMin + gMax) / 2)
   widthSlider.value = Math.round(gMax - gMin)
   updateSliderValues()
+})
+
+benchmarkBtn.addEventListener('click', () => {
+  if (benchmark) stopBenchmark()
+  else startBenchmark()
+})
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopBenchmark()
 })
 
 // Drag and drop support (fallback)
