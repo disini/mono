@@ -311,6 +311,93 @@ nv1.setVolume(0, { calMin: 40, colormap: 'hot' })
 
 Same pattern for meshes, layers, tracts, connectomes.
 
+## Entry points and public exports
+
+The package ships three hand-maintained entry points:
+
+| Subpath | File | Distribution |
+|---------|------|--------------|
+| `@niivue/niivue` | `src/index.ts` | universal (carries both backends) |
+| `@niivue/niivue/webgl2` | `src/index.webgl2.ts` | WebGL2 only |
+| `@niivue/niivue/webgpu` | `src/index.webgpu.ts` | WebGPU only |
+
+(The other `package.json` subpaths, `./viewport`, `./assets/fonts` and
+`./assets/matcaps`, point straight at a module and have no hand-written index.)
+
+**A new public export goes in all three files.** Adding it to `src/index.ts`
+alone is the standing mistake, and nothing in the toolchain catches it: the
+typecheck passes, the build passes, `dist/index.d.ts` has the symbol, and the
+docs describe it. It surfaces only downstream, when someone writes
+`import { Thing } from '@niivue/niivue/webgl2'` against a package that plainly
+documents `Thing` and gets a build error. Reviewers should read a diff that
+touches `src/index.ts` and no other entry point as a defect until shown otherwise.
+
+### The only sanctioned differences
+
+`src/index.webgl2.ts` and `src/index.webgpu.ts` are the same file apart from
+three lines: the header comment, the backend's own slide renderer, and the
+default export.
+
+```bash
+diff src/index.webgl2.ts src/index.webgpu.ts
+# exactly three hunks:
+#   the 'WebGL2-only distribution' header comment vs 'WebGPU-only'
+#   export { SlideRenderer } from './gl/slide'
+#                             vs   { SlideRendererGPU } from './wgpu/slide'
+#   export { default, default as NiiVue } from './NVControlWebGL2'
+#                                          vs   './NVControlWebGPU'
+```
+
+A fourth hunk is a bug. That diff is the cheapest pre-push check there is.
+
+Against the root entry, the one sanctioned omission is the **`*Detail` event
+payload types** re-exported from `./NVEvents` (`VolumeLoadedDetail`,
+`ClipPlaneChangeDetail`, and the rest). Those are root-only. Everything else the
+root entry exports belongs in both backend entries as well.
+
+### Checking a branch
+
+`src/entryPoints.test.ts` asserts all of this and runs in the normal `bun test`
+target, so ordinary CI catches the drift now. It checks four things: the two
+backend entries differ only by their own slide renderer; neither exports a name
+the root entry lacks; nothing but `*Detail` types and the other backend's
+renderer is root-only; and every `*Detail` type `NVEvents.ts` declares is
+exported from root.
+
+By hand, the same question:
+
+```bash
+names() {
+  tr '\n' ' ' < "$1" | grep -oE 'export (type )?\{[^}]*\} from' |
+  tr -d '{}' | sed 's/export \(type \)*//;s/ from//' | tr ',' '\n' |
+  sed 's/.* as //;s/^ *type *//;s/^ *//;s/ *$//' | grep -v '^$' | sort -u
+}
+diff <(names src/index.ts) <(names src/index.webgl2.ts) | grep '^<' | grep -v 'Detail$'
+```
+
+### Keeping the three files in step
+
+The backend entries are a mechanical function of the root entry: root, minus the
+`*Detail` names, with the header comment, the slide-renderer line and the default
+export swapped. Edit `src/index.ts` first and mirror the change into both backend
+files; the test above will tell you if you missed one.
+
+### The single-backend distributions are not backend-isolated
+
+Separate from the export policy, and worth knowing before reasoning about what a
+subpath "costs": `dist/niivue.webgl2.js` and `dist/niivue.webgpu.js` currently
+share three of their five chunks, including the 1.83 MB one that holds both
+backends. The path is `NVControlBase.ts` -> `control/viewBoth.ts` -> both
+`gl/NVViewGL.ts` and `wgpu/NVViewGPU.ts` (`control/interactions.ts`,
+`control/viewWebGL2.ts` and `control/viewWebGPU.ts` reach it the same way), a
+static import that no entry point can tree-shake away. So the subpaths today
+select a default export, not a smaller bundle. The slide renderers *are* split
+per backend, because the entry point should not be the thing that cements the
+leak.
+
+Tracked as https://github.com/niivue/mono/issues/175, with the cause and the fix
+written up there. Delete this section when it lands.
+
 ## Code style and conventions
 
 Linting/formatting is **Biome**, configured in the monorepo root `biome.json`. See the root `AGENTS.md` for the full rule list; key rules enforced here:
@@ -1454,7 +1541,15 @@ Exported from `volume/utils.ts` and from the package root. Returns `Float32Array
 
 ### Public exports
 
-From package root (`src/index.ts`): `NVExtensionContext`, `computeSlicePointerEvent`, `getImageDataRAS`, and types `BackgroundVolumeAccess`, `DrawingAccess`, `DrawingDims`, `NVExtensionEventMap`, `SharedBufferHandle`, `SlicePointerEvent`.
+From all three entry points (see **Entry points and public exports**):
+`NVExtensionContext`, `getImageDataRAS`, and types `BackgroundVolumeAccess`,
+`DrawingAccess`, `DrawingDims`, `MrsVolumeAccess`, `NVExtensionEventMap`,
+`SharedBufferHandle`, `SlicePointerEvent`.
+
+`computeSlicePointerEvent` is **not** exported from any entry point. It lives in
+`extension/context.ts` and is called from `control/interactions.ts`; this section
+used to list it as public, which it never was. Either re-export it from all three
+entries or leave it internal, but the doc should not promise it.
 
 ## Web Workers
 

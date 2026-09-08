@@ -1,14 +1,25 @@
 /**
  * NiiVue — WebGL2-only distribution.
+ *
+ * @packageDocumentation
  */
 
-// biome-ignore-all lint/performance/noBarrelFile: package entry point
-
-// Exploded-block picking: resolve a click on an exploded brick, then copy that
-// brick out as a standalone volume that keeps the parent's anatomical frame.
-export type { ExplodedBlockPick } from './control/interactions'
-export { pickExplodedBlock } from './control/interactions'
+// biome-ignore-all lint/performance/noBarrelFile assist/source/organizeImports: package entry point
+// Label colormap helpers for extensions producing label/atlas volumes
+export { lookupColorMap, makeLabelLut } from './cmap/NVCmaps'
+export { slice2DToMM } from './annotation/sliceProjection'
+// Viewport controller (OpenSeadragon-style smooth pan/zoom on the shared canvas).
+// Opt-in: not in the static graph so apps that don't need the UX don't pay for it.
+// Import directly: `import { NVCanvasViewportController } from '@niivue/niivue/viewport'`
 export type { NVCanvasViewportControllerOptions } from './control/NVCanvasViewportController'
+// Sparse-document settings policies: which settings saveDocument includes, and
+// how loadDocument fills settings a sparse document omits
+export type {
+  SettingsFill,
+  SettingsFillPolicy,
+  SettingsSavePolicy,
+} from './documentSettings'
+// Extension API
 export { NVExtensionContext } from './extension/context'
 export type {
   BackgroundVolumeAccess,
@@ -19,7 +30,13 @@ export type {
   SharedBufferHandle,
   SlicePointerEvent,
 } from './extension/types'
+// Whole-slide-image tile viewer (standalone 2D deep-zoom over HTTP byte ranges).
+// NVSlide is the backend-agnostic model; SlideRenderer (WebGL2) /
+// SlideRendererGPU (WebGPU) draw it.
+export { SlideRenderer } from './gl/slide'
+// Logger
 export type { LogLevel } from './logger'
+// Mesh writer types
 export type { WriteOptions } from './mesh/writers'
 // MRSI scene controller (FSLeyes MRS plugin workflow): anatomy + MRSI grid +
 // crosshair spectrum + metabolite maps, built on the core spectroscopy APIs.
@@ -33,6 +50,7 @@ export {
   PROTON_PEAK_ANNOTATIONS,
   paddedPpmRange,
 } from './mrs/MrsScene'
+// Enums
 export {
   DRAG_MODE,
   LAYER_GRADIENT_MODE,
@@ -43,37 +61,68 @@ export {
   VOLUME_RENDER_MODE,
 } from './NVConstants'
 export { default, default as NiiVue } from './NVControlWebGL2'
+// Document save options (settings policy + linkData)
+export type { SerializeOptions } from './NVDocument'
+// Event types
+export type {
+  NVEventListener,
+  NVEventMap,
+  NVEventTarget,
+  VolumeUpdatedChanges,
+} from './NVEvents'
+// Core types used in the public API
 export type {
   AffineMatrix,
   AffineTransform,
+  AnnotationConfig,
+  AnnotationPoint,
+  AnnotationScreenShape,
+  AnnotationStats,
+  AnnotationStyle,
+  AnnotationTool,
   BackendType,
   CanvasViewport,
   ColorMap,
+  CompletedAngle,
+  CompletedMeasurement,
   CustomLayoutTile,
   DragReleaseInfo,
   ImageFromUrlOptions,
   LodCompensationLevel,
   LodCompensationReport,
+  LUT,
   MeasurementScreenLine,
   MeshFromUrlOptions,
+  MeshKind,
   MeshLayerFromUrlOptions,
   MeshUpdate,
   MrsVolumeMeta,
+  NIFTI1,
+  NIFTI2,
+  NIFTIHeader,
   NiiVueLocation,
   NiiVueLocationValue,
   NiiVueOptions,
   NVBounds,
+  NVConnectomeData,
+  NVConnectomeEdge,
+  NVConnectomeNode,
   NVConnectomeOptions,
   NVFontData,
   NVGlobalCamera,
   NVImage,
   NVInstance,
   NVMesh,
+  NVMeshData,
   NVMeshLayer,
   NVSignal,
   NVSignalDisplay,
+  NVSignalPhysioRaw,
   NVSignalRaw,
+  NVSignalSpectroscopyRaw,
+  NVTractData,
   NVTractOptions,
+  PolygonWithHoles,
   SaveVolumeOptions,
   SignalAnnotation,
   SignalAxis,
@@ -82,11 +131,16 @@ export type {
   SignalSidecar,
   SignalSpectrumMode,
   SyncOpts,
+  TractScalarMeta,
+  TypedVoxelArray,
+  VectorAnnotation,
   ViewHitTest,
+  VolumeChunkExplode,
   VolumeChunkSource,
   VolumeChunkSourceRequest,
   VolumeUpdate,
 } from './NVTypes'
+// Signal load options
 export type { SignalFromUrlOptions } from './signal/NVSignal'
 // MRS / spectroscopy processing (used by the MrsScene controller above and by
 // other spectroscopy extensions)
@@ -101,13 +155,53 @@ export {
   type PpmBandOptions,
   phaseCorrection,
   ppmRefForNucleus,
+  type SignalPlot,
 } from './signal/processing'
+export type { DziDescriptor } from './slide/dziSource'
+export {
+  buildDziManifest,
+  DziSource,
+  parseDziDescriptor,
+} from './slide/dziSource'
 export type {
-  UIKitBackendHandle,
-  UIKitOverlayBounds,
-  UIKitOverlayFrame,
-  UIKitOverlayRenderer,
-} from './view/NVOverlayHook'
+  NVSlideColor,
+  NVSlideLevelChoice,
+  NVSlideLevelManifest,
+  NVSlideManifest,
+  NVSlideOptions,
+  NVSlideRangeEvent,
+  NVSlideRangeStatus,
+  NVSlideScreen,
+  NVSlideScreenRect,
+  NVSlideSpatialTransform,
+  NVSlideStats,
+  NVSlideTileCodec,
+  NVSlideTileFragment,
+  NVSlideTileManifest,
+  NVSlideViewport,
+  NVSlideVisibleTile,
+  NVSlideVisibleTiles,
+  NVSlideYAxis,
+  SlideSourceHost,
+  SlideTileDecoder,
+  SlideTileSource,
+} from './slide/NVSlide'
+export { ManifestRangeSource, NVSlide } from './slide/NVSlide'
+export { SlideDrawing } from './slide/slideDrawing'
+export type {
+  AxialPlaneOptions,
+  SlidePlaneTile,
+  Vec3 as SlideVec3,
+} from './slide/slidePlane'
+export { axialPlaneTransform, slidePlaneTiles } from './slide/slidePlane'
+export type { SlideVectorKind, SlideVectorShape } from './slide/slideVector'
+export { SlideVectorLayer } from './slide/slideVector'
+export type {
+  VolumeSliceAxis,
+  VolumeSliceSourceOptions,
+} from './slide/volumeSliceSource'
+export { VolumeSliceSource } from './slide/volumeSliceSource'
+export { buildDrawingLut, drawingBitmapToRGBA } from './view/NVDrawingTexture'
 // Allen "volume-viewer" JSON + PNG atlas datasets (multi-channel microscopy)
 export {
   type AllenAtlasImage,
@@ -125,21 +219,22 @@ export {
   fetchAllenAtlasInfo,
   loadAllenAtlasVolumes,
 } from './volume/allenAtlasLoader'
-// Budget plans: the policy that shapes a streamed volume's octree
-export {
-  BUDGET_PLANS,
-  type BudgetPlan,
-  type BudgetPlanName,
-  type BudgetPlanOptions,
-  type BudgetPlanSpec,
-  resolveBudgetPlan,
-} from './volume/budgetPlans'
-export type { ExtractedSubVolume } from './volume/ChunkExtract'
-export {
-  extractChunkBlock,
-  extractSubVolume,
-  subVolumeAffine,
-} from './volume/ChunkExtract'
+// UIKit overlay lifecycle hook — the seam @niivue/uikit widgets draw into
+export type {
+  UIKitBackendHandle,
+  UIKitOverlayBounds,
+  UIKitOverlayFrame,
+  UIKitOverlayRenderer,
+} from './view/NVOverlayHook'
+// Font atlas metrics: the shape of NVFontData.metrics
+export type { FontMetrics } from './view/NVFont'
+// Per-frame render timing: the payload of PerfFrameDetail
+export type { FrameReport } from './view/NVPerfMarks'
+// Base class every render entity extends; SlideRenderer's public supertype
+export { NVRenderer } from './view/NVRenderer'
+// Screen-space projection, for placing external overlays over the 2D tiles
+export type { ScreenInfo, SliceTile } from './view/NVSliceLayout'
+export { projectMMToCanvas } from './view/sliceUtils'
 // Crosshair-focused multi-resolution (multi-LOD) streamed volumes
 export type {
   ChunkedVolumeFetch,
@@ -171,14 +266,38 @@ export {
   recordChunkPhase,
   resetChunkTiming,
 } from './volume/chunkTiming'
-// OME-Zarr chunk-streaming adapter for nv.loadChunkedVolume
-export { fetchOmeZarrChunkedSource } from './volume/fetchOmeZarrChunkedSource'
+// Exploded-block picking: resolve a click on an exploded brick, then copy that
+// brick out as a standalone volume that keeps the parent's anatomical frame.
+export type { ExplodedBlockPick } from './control/interactions'
+export { pickExplodedBlock } from './control/interactions'
+export type { ExtractedSubVolume } from './volume/ChunkExtract'
+export {
+  extractChunkBlock,
+  extractSubVolume,
+  subVolumeAffine,
+} from './volume/ChunkExtract'
 // MRSI (spatial spectroscopic imaging) volume helpers
 export { buildDerivedScalarVolume, isMrsiVolume } from './volume/mrsi'
+// Budget plans: the policy that shapes a streamed volume's octree
+export {
+  type BudgetPlan,
+  type BudgetPlanContext,
+  type BudgetPlanName,
+  type BudgetPlanOptions,
+  type BudgetPlanSpec,
+  BUDGET_PLANS,
+  resolveBudgetPlan,
+  type ResolvedOptions as ResolvedBudgetOptions,
+} from './volume/budgetPlans'
+// Decoded image, for a caller supplying its own `decodeImage`
+export type { DecodedImage } from './volume/imageDecode'
 export {
   type ChunkedVolumeOptions,
   NVChunkedVolume,
 } from './volume/NVChunkedVolume'
+// Volume construction/serialization for extensions building derived volumes
+// (e.g. wrapping segmentation labels into an overlay NVImage)
+export { nii2volume, writeVolume } from './volume/NVVolume'
 export {
   type ImageJStackInfo,
   type OmeChannel,
@@ -215,6 +334,8 @@ export {
   parseOmeroColor,
   parseOmeZarrAttrs,
 } from './volume/omeZarr'
+// OME-Zarr chunk-streaming adapter for nv.loadChunkedVolume
+export { fetchOmeZarrChunkedSource } from './volume/fetchOmeZarrChunkedSource'
 export {
   type ByteCacheStats,
   ByteLruCache,
@@ -228,6 +349,18 @@ export {
   withChunkTiming,
 } from './volume/omeZarrChunkedSource'
 export type { OmeZarrChunkPoolOptions } from './volume/omeZarrChunkWorkerPool'
+export {
+  clearPersistentByteCaches,
+  OME_ZARR_PERSIST_BYTES,
+  openCacheStorageBacking,
+  openPersistentByteCache,
+  PERSISTENT_CACHE_NAME,
+  PersistentByteCache,
+  type PersistentCacheBacking,
+  type PersistentCacheOptions,
+  type PersistentCacheStats,
+  withPersistentBytes,
+} from './volume/persistentByteCache'
 export {
   defaultOmeZarrLevel,
   fetchOmeZarr,
@@ -247,18 +380,6 @@ export {
   openOmeZarr,
 } from './volume/omeZarrLoader'
 export {
-  clearPersistentByteCaches,
-  OME_ZARR_PERSIST_BYTES,
-  openCacheStorageBacking,
-  openPersistentByteCache,
-  PERSISTENT_CACHE_NAME,
-  PersistentByteCache,
-  type PersistentCacheBacking,
-  type PersistentCacheOptions,
-  type PersistentCacheStats,
-  withPersistentBytes,
-} from './volume/persistentByteCache'
-export {
   createStreamingNVImage,
   type StreamingVolumeSpec,
 } from './volume/streamingVolume'
@@ -270,6 +391,7 @@ export {
   type TiffImage,
   tiffImageDescription,
   tiffResolutionMm,
+  type TiffTagValue,
 } from './volume/tiff'
 export {
   describeTiff,
@@ -284,5 +406,17 @@ export {
   tiffTimepointCount,
   tiffVolumeAffine,
 } from './volume/tiffVolume'
-export type { TransformInfo, TransformOptions } from './volume/transforms'
+// Transform types
+export type {
+  OptionField,
+  ResultDefaults,
+  TransformInfo,
+  TransformOptions,
+  VolumeTransform,
+} from './volume/transforms'
+// Volume utilities for extensions
 export { extractVoxelFid, getImageDataRAS } from './volume/utils'
+// Volume writer options: the third argument to writeVolume
+export type { VolumeWriteOptions } from './volume/writers'
+// Worker bridge for external transform packages
+export { NVWorker } from './workers/NVWorker'
