@@ -97,6 +97,8 @@ TRX, TT, TSF (scalars), VTK lines.
 | `getClipPlaneDepthAziElev(i)` | Method | No | |
 | `setClipPlaneDepthAziElev(i, d, a, e)` | Method | No | |
 | `activeClipPlaneIndex`, `currentClipPlaneIndex` | Prop | No | |
+| `focusBox` | Prop (get/set) | No | `FocusBox \| null`; world-mm AABB outlined as 12 edges on the 3D render tile(s). Assigning redraws; `null` clears. Not serialized |
+| `lodBoxes` | Prop (get/set) | No | `FocusBox[] \| null`; the same outline for a set of boxes, e.g. one per streamed LOD brick coloured by level |
 
 ## 5. Layout & View Mode
 
@@ -174,6 +176,11 @@ TRX, TT, TSF (scalars), VTK lines.
 | `loadDrawing(…)` | Method | Yes | |
 | `drawPenAutoClose`, `drawPenFilled` | Prop | No | |
 | `maxDrawUndoBitmaps` | Prop | No | Default 8 |
+| `slideTool` | Prop (get/set) | No | `SlideDrawTool`: `'pen' \| 'eraser' \| 'bucket' \| 'filled' \| 'wand' \| 'vector'`. Selects the active tool for slide drawing |
+
+`slideTool` applies to whole-slide (WSI) drawing, which is a separate surface
+from the volume pen above: `slideDrawAt`, `slideDrawEnd`, `slideDrawUndo`,
+`slideWandTolerance` and `slideVector`. Only the tool selector is listed here.
 
 ## 10. Vector Annotations
 
