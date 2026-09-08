@@ -28,7 +28,7 @@ Source of truth: `packages/niivue/src/index.ts` (package exports),
 | `attachToCanvas(canvas, isAntiAlias?)` | Method | Yes | Binds to a `HTMLCanvasElement` | Alt. to `attachTo` |
 | `destroy()` | Method | No | Releases GPU resources + listeners | Call before tearing down view |
 | `resize()` | Method | No | Force canvas resize | Call on SwiftUI size-class change |
-| `reinitializeView(options)` | Method | Yes | Recreate view (e.g. backend swap) | Rare; advanced |
+| `reinitializeView(options)` | Method | Yes | Recreate view (e.g. backend swap); `ReinitializeOptions` | Rare; advanced |
 | `backend` | Prop (get) | No | `'webgpu' \| 'webgl2' \| undefined` | Read for UI capability gating |
 | `isAntiAlias` | Prop (get) | No | Read-only | — |
 | `devicePixelRatio` / `forceDevicePixelRatio` | Prop | No | Override DPR | Tune for Retina/ProMotion |
@@ -97,6 +97,8 @@ TRX, TT, TSF (scalars), VTK lines.
 | `getClipPlaneDepthAziElev(i)` | Method | No | |
 | `setClipPlaneDepthAziElev(i, d, a, e)` | Method | No | |
 | `activeClipPlaneIndex`, `currentClipPlaneIndex` | Prop | No | |
+| `focusBox` | Prop (get/set) | No | `FocusBox \| null`; world-mm AABB outlined as 12 edges on the 3D render tile(s). Assigning redraws; `null` clears. Not serialized |
+| `lodBoxes` | Prop (get/set) | No | `FocusBox[] \| null`; the same outline for a set of boxes, e.g. one per streamed LOD brick coloured by level |
 
 ## 5. Layout & View Mode
 
@@ -174,6 +176,11 @@ TRX, TT, TSF (scalars), VTK lines.
 | `loadDrawing(…)` | Method | Yes | |
 | `drawPenAutoClose`, `drawPenFilled` | Prop | No | |
 | `maxDrawUndoBitmaps` | Prop | No | Default 8 |
+| `slideTool` | Prop (get/set) | No | `SlideDrawTool`: `'pen' \| 'eraser' \| 'bucket' \| 'filled' \| 'wand' \| 'vector'`. Selects the active tool for slide drawing |
+
+`slideTool` applies to whole-slide (WSI) drawing, which is a separate surface
+from the volume pen above: `slideDrawAt`, `slideDrawEnd`, `slideDrawUndo`,
+`slideWandTolerance` and `slideVector`. Only the tool selector is listed here.
 
 ## 10. Vector Annotations
 
@@ -368,8 +375,9 @@ From the package root (`@niivue/niivue`):
   `NVImage`, `NVMesh`, `NVMeshLayer`, `NVTractOptions`, `NVConnectomeOptions`,
   `NVFontData`, `ColorMap`, `CustomLayoutTile`, `BackendType`, `NIFTI1`,
   `NIFTI2`, `TypedVoxelArray`, `SyncOpts`, `SaveVolumeOptions`, `ViewHitTest`,
-  `DragReleaseInfo`, `ImageFromUrlOptions`, `MeshFromUrlOptions`,
-  `MeshLayerFromUrlOptions`, `VolumeUpdate`, `MeshUpdate`.
+  `DragReleaseInfo`, `FocusBox`, `ImageFromUrlOptions`, `MeshFromUrlOptions`,
+  `MeshLayerFromUrlOptions`, `VolumeUpdate`, `MeshUpdate`,
+  `ReinitializeOptions`, `SlideDrawTool`.
 - **Events:** `NVEventMap`, `NVEventListener`, `NVEventTarget`, and every
   `*Detail` type.
 - **Extension API:** `NVExtensionContext`, `BackgroundVolumeAccess`,
@@ -383,7 +391,10 @@ From the package root (`@niivue/niivue`):
 
 Package subpath entries also ship bundled asset barrels:
 `@niivue/niivue/assets/fonts`, `@niivue/niivue/assets/matcaps`, plus explicit
-`/webgpu` and `/webgl2` entry points if you want to pin a backend.
+`/webgpu` and `/webgl2` entry points if you want to pin a backend. Those two
+pin the API surface, not the bundle: both currently pull a shared chunk that
+contains each renderer, so neither is smaller than the universal entry. See
+issue #175.
 
 ---
 
