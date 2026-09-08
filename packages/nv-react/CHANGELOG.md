@@ -1,3 +1,18 @@
+## 1.0.0-rc.14 (2026-09-02)
+
+### Fixes
+
+- **deps:** pin @types/bun instead of the "latest" dist-tag ([f466415](https://github.com/niivue/mono/commit/f466415))
+
+### Updated Dependencies
+
+- Updated niivue to 1.0.0-rc.13
+
+### Thank You
+
+- Chris Drake
+- Claude Opus 5
+
 ## 1.0.0-rc.13 (2026-08-10)
 
 ### Updated Dependencies
