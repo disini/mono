@@ -1076,16 +1076,21 @@ export type VisibleWindowMM = [
  * because a slice tile shows a plane there, not a range; callers that want the
  * slice position already have it from `tile.sliceMM` or the crosshair.
  *
- * @param tile - a 2D slice tile (returns null for render or non-orientation tiles)
+ * `global3d` tiles return null: their ortho window is in instance space and
+ * would need the tile's position/scale/orientation applied before it means
+ * anything in world mm. Returning the raw numbers would label instance-space
+ * millimetres as world millimetres, which no caller can detect.
+ *
+ * @param tile - a 2D slice tile (returns null for render, global3d or non-orientation tiles)
  * @param pan2Dxyzmm - the scene's `[panX, panY, panZ, zoom]`
- * @returns per-world-axis windows, or null for a tile with no 2D ortho window
+ * @returns per-world-axis windows, or null for a tile with no 2D world-mm ortho window
  */
 export function tileVisibleWindowMM(
   tile: SliceTile,
   pan2Dxyzmm: ArrayLike<number> = [0, 0, 0, 1],
 ): VisibleWindowMM | null {
   const map = IDX_MAP[tile.axCorSag]
-  if (!map || !tile.screen) return null
+  if (!map || !tile.screen || tile.space === 'global3d') return null
   const { mnMM, mxMM } = tile.screen
   const pan = slicePanUV(pan2Dxyzmm, tile.axCorSag)
   // A zero or non-finite zoom would blow the window up to infinity; treat it
@@ -1112,9 +1117,8 @@ export function tileVisibleWindowMM(
  * extents yourself if you want the visible part of the data rather than of the
  * world.
  *
- * `global3d` tiles are skipped along with render tiles: their window lives in
- * instance space and would need the tile's position/scale/orientation applied
- * before it means anything in world mm.
+ * Render and `global3d` tiles are skipped, for the reasons on
+ * {@link tileVisibleWindowMM}.
  *
  * @param tiles - the laid-out screen slices
  * @param pan2Dxyzmm - the scene's `[panX, panY, panZ, zoom]`
@@ -1125,7 +1129,6 @@ export function visibleWindowMM(
 ): VisibleWindowMM {
   const out: VisibleWindowMM = [null, null, null]
   for (const tile of tiles) {
-    if (tile.space === 'global3d') continue
     const windows = tileVisibleWindowMM(tile, pan2Dxyzmm)
     if (!windows) continue
     for (let axis = 0; axis < 3; axis++) {

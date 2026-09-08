@@ -387,10 +387,14 @@ describe('visibleWindowMM', () => {
     expect(tileVisibleWindowMM(render)).toBeNull()
     expect(visibleWindowMM([render])).toEqual([null, null, null])
 
-    const global3d = {
-      ...screenSlicesLayout(mpr())[0],
-      space: 'global3d',
-    } as SliceTile
+    // Same tile, only `space` differs: without the flag it reports a window, so
+    // this pins the skip rather than a tile that was empty anyway. The tile-level
+    // entry has to refuse it too: its ortho window is in instance space, and a
+    // caller reading those numbers as world mm cannot tell the difference.
+    const canvasTile = screenSlicesLayout(mpr())[0]
+    expect(tileVisibleWindowMM(canvasTile)).not.toBeNull()
+    const global3d = { ...canvasTile, space: 'global3d' } as SliceTile
+    expect(tileVisibleWindowMM(global3d)).toBeNull()
     expect(visibleWindowMM([global3d])).toEqual([null, null, null])
 
     expect(
