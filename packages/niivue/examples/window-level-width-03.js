@@ -18,6 +18,8 @@ let nextWorkerRequestId = 1
 const workerRequests = new Map()
 let windowUpdateStats = createWindowUpdateStats()
 let benchmark = null
+let callbackProbeRunning = false
+let callbackProbeDisturbed = false
 
 const dicomInput = document.getElementById('dicomInput')
 const levelSlider = document.getElementById('levelSlider')
@@ -27,6 +29,7 @@ const widthValue = document.getElementById('widthValue')
 const resetBtn = document.getElementById('resetBtn')
 const benchmarkBtn = document.getElementById('benchmarkBtn')
 const benchmarkRate = document.getElementById('benchmarkRate')
+const callbackProbeBtn = document.getElementById('callbackProbeBtn')
 const statusEl = document.getElementById('status')
 const loadingEl = document.getElementById('loading')
 const loadingTextEl = document.getElementById('loadingText')
@@ -257,6 +260,7 @@ async function initializeRenderer() {
 }
 
 function applyWindow() {
+  if (callbackProbeRunning) callbackProbeDisturbed = true
   if (!hasVolume) return
   windowUpdateStats.inputCount += 1
   const level = Number(levelSlider.value)
@@ -446,6 +450,7 @@ async function processDicomFiles(files) {
 
 // Deadline-based input generation: skip missed ticks, never send catch-up bursts.
 function startBenchmark() {
+  if (callbackProbeRunning) return
   if (!hasVolume || rendererMode !== 'worker') return
   const hz = Number(benchmarkRate.value)
   benchmark = {
@@ -512,7 +517,78 @@ benchmarkBtn.addEventListener('click', () => {
   if (benchmark) stopBenchmark()
   else startBenchmark()
 })
+
+function probeMainFrames() {
+  return new Promise((resolve) => {
+    const intervals = []
+    let previous = null
+    let handle = null
+    const tick = () => {
+      const now = performance.now()
+      if (previous !== null) intervals.push(now - previous)
+      previous = now
+      handle = requestAnimationFrame(tick)
+    }
+    handle = requestAnimationFrame(tick)
+    setTimeout(() => {
+      cancelAnimationFrame(handle)
+      const total = intervals.reduce((sum, value) => sum + value, 0)
+      intervals.sort((a, b) => a - b)
+      resolve({
+        supported: true,
+        source: 'native',
+        samples: intervals.length,
+        hz:
+          total > 0
+            ? Number(((intervals.length * 1000) / total).toFixed(2))
+            : null,
+        averageMs: intervals.length
+          ? Number((total / intervals.length).toFixed(2))
+          : null,
+        p50Ms: intervals.length
+          ? intervals[Math.floor((intervals.length - 1) * 0.5)]
+          : null,
+        p95Ms: intervals.length
+          ? intervals[Math.floor((intervals.length - 1) * 0.95)]
+          : null,
+        maxMs: intervals.length ? intervals[intervals.length - 1] : null,
+      })
+    }, 5000)
+  })
+}
+
+callbackProbeBtn.addEventListener('click', () => {
+  if (callbackProbeRunning || rendererMode !== 'worker') return
+  stopBenchmark()
+  callbackProbeRunning = true
+  callbackProbeDisturbed = document.hidden
+  callbackProbeBtn.disabled = true
+  callbackProbeBtn.textContent = '测量中，请保持页面可见…'
+  void (async () => {
+    try {
+      const [mainThread, worker] = await Promise.all([
+        probeMainFrames(),
+        workerRequest('probeNativeFrames'),
+      ])
+      console.log('Native RAF comparison (5s):', {
+        mainThread,
+        worker,
+        disturbed: callbackProbeDisturbed,
+        visibilityState: document.visibilityState,
+        devicePixelRatio: window.devicePixelRatio,
+        note: 'Callback cadence only; not GPU execution or presented FPS.',
+      })
+    } catch (error) {
+      console.error('RAF comparison failed:', error)
+    } finally {
+      callbackProbeRunning = false
+      callbackProbeBtn.disabled = false
+      callbackProbeBtn.textContent = '对比线程回调 5 秒'
+    }
+  })()
+})
 document.addEventListener('visibilitychange', () => {
+  if (callbackProbeRunning) callbackProbeDisturbed = true
   if (document.hidden) stopBenchmark()
 })
 
@@ -574,6 +650,7 @@ canvasContainer.addEventListener('drop', (event) => {
 
 try {
   await initializeRenderer()
+  callbackProbeBtn.disabled = rendererMode !== 'worker'
   dicomInput.disabled = false
   if (!(await loadSampleFromQuery())) {
     statusEl.textContent = `Ready - ${rendererMode}`

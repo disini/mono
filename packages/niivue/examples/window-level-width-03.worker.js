@@ -9,6 +9,51 @@ let processingWindow = false
 let activeFrameTiming = null
 let lastAnimationCallbackAt = null
 let animationFrameSource = 'unknown'
+let nativeRequestFrame = null
+let nativeCancelFrame = null
+
+// Independent continuous native RAF probe: no NiiVue updates or GPU draws.
+function probeNativeFrames() {
+  if (!nativeRequestFrame || !nativeCancelFrame) {
+    return Promise.resolve({ supported: false, source: animationFrameSource })
+  }
+  return new Promise((resolve) => {
+    const intervals = []
+    let previous = null
+    let handle = null
+    const tick = () => {
+      const now = performance.now()
+      if (previous !== null) intervals.push(now - previous)
+      previous = now
+      handle = nativeRequestFrame(tick)
+    }
+    handle = nativeRequestFrame(tick)
+    setTimeout(() => {
+      nativeCancelFrame(handle)
+      const total = intervals.reduce((sum, value) => sum + value, 0)
+      intervals.sort((a, b) => a - b)
+      resolve({
+        supported: true,
+        source: 'native',
+        samples: intervals.length,
+        hz:
+          total > 0
+            ? Number(((intervals.length * 1000) / total).toFixed(2))
+            : null,
+        averageMs: intervals.length
+          ? Number((total / intervals.length).toFixed(2))
+          : null,
+        p50Ms: intervals.length
+          ? intervals[Math.floor((intervals.length - 1) * 0.5)]
+          : null,
+        p95Ms: intervals.length
+          ? intervals[Math.floor((intervals.length - 1) * 0.95)]
+          : null,
+        maxMs: intervals.length ? intervals[intervals.length - 1] : null,
+      })
+    }, 5000)
+  })
+}
 
 // One active update and one replaceable pending value; never replay a backlog.
 async function drainWindowUpdates() {
@@ -231,6 +276,10 @@ function summarizeVolume(volume) {
 }
 
 async function initialize(message) {
+  if (typeof self.requestAnimationFrame === 'function') {
+    nativeRequestFrame = self.requestAnimationFrame.bind(self)
+    nativeCancelFrame = self.cancelAnimationFrame.bind(self)
+  }
   canvas = message.canvas
   imageBaseUrl = message.baseUrl || ''
   canvas.width = message.width
@@ -334,6 +383,8 @@ self.onmessage = (event) => {
     try {
       if (message.type === 'initialize') {
         reply(message.id, await initialize(message))
+      } else if (message.type === 'probeNativeFrames') {
+        reply(message.id, await probeNativeFrames())
       } else if (message.type === 'loadVolume') {
         reply(message.id, await loadVolume(message.file))
       } else if (message.type === 'setWindow') {
