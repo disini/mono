@@ -238,7 +238,14 @@ export type { FrameReport } from './view/NVPerfMarks'
 // Base class every render entity extends; SlideRenderer's public supertype
 export { NVRenderer } from './view/NVRenderer'
 // Screen-space projection, for placing external overlays over the 2D tiles
-export type { ScreenInfo, SliceTile } from './view/NVSliceLayout'
+export type {
+  AxisWindowMM,
+  ScreenInfo,
+  SliceTile,
+  VisibleWindowMM,
+} from './view/NVSliceLayout'
+// The world-mm span each axis currently shows, for brick prefetchers and axis chrome
+export { tileVisibleWindowMM, visibleWindowMM } from './view/NVSliceLayout'
 export { projectMMToCanvas } from './view/sliceUtils'
 // Crosshair-focused multi-resolution (multi-LOD) streamed volumes
 export type {
