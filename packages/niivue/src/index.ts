@@ -12,6 +12,8 @@ export { slice2DToMM } from './annotation/sliceProjection'
 // Opt-in: not in the static graph so apps that don't need the UX don't pay for it.
 // Import directly: `import { NVCanvasViewportController } from '@niivue/niivue/viewport'`
 export type { NVCanvasViewportControllerOptions } from './control/NVCanvasViewportController'
+// Options accepted by reinitializeView (backend switch, anti-alias, DPR)
+export type { ReinitializeOptions } from './control/viewLifecycle'
 // Sparse-document settings policies: which settings saveDocument includes, and
 // how loadDocument fills settings a sparse document omits
 export type {
@@ -61,6 +63,8 @@ export {
   VOLUME_RENDER_MODE,
 } from './NVConstants'
 export { default, default as NiiVue } from './NVControl'
+// Slide drawing tool names (see the `slideTool` accessor)
+export type { SlideDrawTool } from './NVControlBase'
 // Document save options (settings policy + linkData)
 export type { SerializeOptions } from './NVDocument'
 // Event types
@@ -115,6 +119,7 @@ export type {
   CompletedMeasurement,
   CustomLayoutTile,
   DragReleaseInfo,
+  FocusBox,
   ImageFromUrlOptions,
   LodCompensationLevel,
   LodCompensationReport,
@@ -261,7 +266,14 @@ export type { FrameReport } from './view/NVPerfMarks'
 // Base class every render entity extends; SlideRenderer's public supertype
 export { NVRenderer } from './view/NVRenderer'
 // Screen-space projection, for placing external overlays over the 2D tiles
-export type { ScreenInfo, SliceTile } from './view/NVSliceLayout'
+export type {
+  AxisWindowMM,
+  ScreenInfo,
+  SliceTile,
+  VisibleWindowMM,
+} from './view/NVSliceLayout'
+// The world-mm span each axis currently shows, for brick prefetchers and axis chrome
+export { tileVisibleWindowMM, visibleWindowMM } from './view/NVSliceLayout'
 export { projectMMToCanvas } from './view/sliceUtils'
 // Crosshair-focused multi-resolution (multi-LOD) streamed volumes
 export type {
