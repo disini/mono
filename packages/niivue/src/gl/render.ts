@@ -678,16 +678,29 @@ export class VolumeRenderer extends NVRenderer {
     this._activeChunked = null
     this._cubicVolumeSafe = !vol.colormapLabel
 
+    // This volume is not chunked any more: its plan was cleared, or the same
+    // url was reloaded as a plain volume. Drop the chunked entry now, because
+    // nothing downstream will. It would otherwise sit in `_texCache` for the
+    // life of the renderer holding every brick texture, still driven by
+    // `beginChunkFrame`, and still counted by `chunkStreamStats` -- which then
+    // reports a brick stream for a single-texture volume. The `perVolumeCache`
+    // branch below cleared it, but only multi-instance callers take that
+    // branch, so the ordinary path leaked.
+    const priorEntry = cacheKey ? this._texCache.get(cacheKey) : undefined
+    if (priorEntry?.kind === 'chunked') {
+      this._evictTexEntry(gl, cacheKey, priorEntry)
+    }
+
     if (perVolumeCache) {
       // Multi-instance / global3d: cache each volume's texture by key so the
       // render loop can switch the active texture per tile via
       // bindCachedVolume. (volumeOrientCache is a single slot and cannot serve
       // per-tile volume switching.)
-      let entry = cacheKey ? this._texCache.get(cacheKey) : undefined
-      if (entry && entry.kind !== 'single') {
-        this._destroyTexEntry(gl, entry)
-        entry = undefined
-      }
+      // The chunked case was evicted above, so anything still here is single.
+      // Narrowing on `kind` rather than asserting keeps that an invariant the
+      // compiler checks.
+      const prior = cacheKey ? this._texCache.get(cacheKey) : undefined
+      let entry = prior?.kind === 'single' ? prior : undefined
       if (!entry) {
         const volumeTexture = await orientOverlay.overlay2Texture(
           gl,
@@ -853,7 +866,7 @@ export class VolumeRenderer extends NVRenderer {
       }
       return existing
     }
-    if (existing) this._destroyTexEntry(gl, existing)
+    if (existing) this._evictTexEntry(gl, cacheKey, existing)
     // The entry holds the live uploader so an in-place plan swap can replace it;
     // the prefetch hook reads it off `entry` (not a creation closure) so it
     // always targets the current plan.
@@ -1567,14 +1580,33 @@ export class VolumeRenderer extends NVRenderer {
     }
   }
 
+  /**
+   * Release an entry's GPU resources AND drop it from the cache.
+   *
+   * Destroying without deleting is the dangerous half: the entry stays in
+   * `_texCache`, so every method that iterates the map -- `beginChunkFrame`,
+   * the gradient refreshes, `chunkStreamStats` -- can still reach a destroyed
+   * manager and a disposed uploader. The replace-in-place call sites only
+   * re-`set` the key after an await, so a frame landing in that window sees the
+   * dead entry. Always evict through here rather than pairing the two calls by
+   * hand.
+   */
+  private _evictTexEntry(
+    gl: WebGL2RenderingContext,
+    key: string | undefined,
+    entry: TexCacheEntry,
+  ): void {
+    this._destroyTexEntry(gl, entry)
+    if (key) this._texCache.delete(key)
+  }
+
   /** Release any cached volume textures whose key is not in `keepKeys`. */
   pruneVolumeCache(keepKeys: Set<string>): void {
     const gl = this._gl
     if (!gl) return
     for (const [key, entry] of this._texCache) {
       if (keepKeys.has(key)) continue
-      this._destroyTexEntry(gl, entry)
-      this._texCache.delete(key)
+      this._evictTexEntry(gl, key, entry)
     }
   }
 
