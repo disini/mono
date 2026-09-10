@@ -10,9 +10,16 @@ NiiVue is a WebGPU-based neuroimaging visualization library (volumes + meshes) w
 
 Package manager is **Bun**. Never use `npm`/`npx`/`pnpm`/`yarn`.
 
+The version is pinned in `.bun-version` (every workflow reads it via
+`oven-sh/setup-bun`'s `bun-version-file`); match it locally with
+`curl -fsSL https://bun.sh/install | bash -s "bun-v$(cat .bun-version)"`. An older
+Bun silently diverges: it rewrites `bun.lock` to an older format, does not hoist
+`bun-types` (so several projects fail `typecheck` with TS2688), and lacks
+`DecompressionStream`, which fails any test that decodes a gzipped fixture.
+
 ```bash
 bun install                          # Install dependencies
-bun run dev                          # Hot-reload dev server at localhost:8080
+bun run dev                          # Hot-reload dev server at localhost:5273
 bun run build                        # Library build to ./dist (vite.config.lib.ts, ES)
 bun run build:examples               # Examples site build (vite.config.examples.ts)
 bun run deploy                       # Production examples-site build (GitHub Pages)
@@ -33,7 +40,7 @@ bunx nx lint niivue
 
 **Before committing**, run `bun run lint:fix && bun run typecheck` (or `bunx nx lint niivue && bunx nx typecheck niivue`).
 
-`bun run dev` uses a Vite plugin (`vite.config.dev.js`) to redirect `import '../dist/niivue.js'` to source for HMR, so the same HTML/JS files work in dev and production.
+`bun run dev` serves `examples/` from source (the pages `import '../src/index.ts'`), so dev and the examples build run the same files.
 
 Library packaging: `bun run build` emits `dist/niivue.js` (both backends), `dist/niivue.webgpu.js` (WebGPU-only), and `dist/niivue.webgl2.js` (WebGL2-only), exported as `@niivue/niivue`, `@niivue/niivue/webgpu`, and `@niivue/niivue/webgl2`.
 
@@ -216,7 +223,7 @@ The model is organized into 8 semantic config groups:
 | Group | Purpose | Example properties |
 |-------|---------|-------------------|
 | `scene` | Camera, crosshair, clip planes, background | `azimuth`, `elevation`, `backgroundColor`, `scaleMultiplier` |
-| `layout` | Slice type, mosaic, multiplanar, hero, tiling | `sliceType`, `mosaicString`, `heroFraction`, `isRadiological` |
+| `layout` | Slice type, mosaic, multiplanar, hero, tiling | `sliceType`, `mosaicString`, `heroFraction`, `isRadiological`, `isSingleViewFillCanvas` |
 | `ui` | Visual chrome: colorbars, orient labels, fonts | `isColorbarVisible`, `crosshairWidth`, `fontScale`, `placeholderText` |
 | `volume` | Global volume rendering settings | `illumination`, `isNearestInterpolation`, `outlineWidth` |
 | `mesh` | Global mesh rendering settings | `xRay`, `thicknessOn2D` |
@@ -304,6 +311,189 @@ nv1.setVolume(0, { calMin: 40, colormap: 'hot' })
 
 Same pattern for meshes, layers, tracts, connectomes.
 
+## Entry points and public exports
+
+The package ships three hand-maintained entry points:
+
+| Subpath | File | Distribution |
+|---------|------|--------------|
+| `@niivue/niivue` | `src/index.ts` | universal (carries both backends) |
+| `@niivue/niivue/webgl2` | `src/index.webgl2.ts` | WebGL2 only |
+| `@niivue/niivue/webgpu` | `src/index.webgpu.ts` | WebGPU only |
+
+(The other `package.json` subpaths, `./viewport`, `./assets/fonts` and
+`./assets/matcaps`, point straight at a module and have no hand-written index.)
+
+**A new public export goes in all three files.** Adding it to `src/index.ts`
+alone is the standing mistake, and nothing in the toolchain catches it: the
+typecheck passes, the build passes, `dist/index.d.ts` has the symbol, and the
+docs describe it. It surfaces only downstream, when someone writes
+`import { Thing } from '@niivue/niivue/webgl2'` against a package that plainly
+documents `Thing` and gets a build error. Reviewers should read a diff that
+touches `src/index.ts` and no other entry point as a defect until shown otherwise.
+
+### The only sanctioned differences
+
+`src/index.webgl2.ts` and `src/index.webgpu.ts` are the same file apart from
+three lines: the header comment, the backend's own slide renderer, and the
+default export.
+
+```bash
+diff src/index.webgl2.ts src/index.webgpu.ts
+# exactly three hunks:
+#   the 'WebGL2-only distribution' header comment vs 'WebGPU-only'
+#   export { SlideRenderer } from './gl/slide'
+#                             vs   { SlideRendererGPU } from './wgpu/slide'
+#   export { default, default as NiiVue } from './NVControlWebGL2'
+#                                          vs   './NVControlWebGPU'
+```
+
+A fourth hunk is a bug. That diff is the cheapest pre-push check there is.
+
+Against the root entry, the one sanctioned omission is the **`*Detail` event
+payload types** re-exported from `./NVEvents` (`VolumeLoadedDetail`,
+`ClipPlaneChangeDetail`, and the rest). Those are root-only. Everything else the
+root entry exports belongs in both backend entries as well.
+
+### Checking a branch
+
+`src/entryPoints.test.ts` asserts all of this and runs in the normal `bun test`
+target, so ordinary CI catches the drift now. It checks four things: the two
+backend entries differ only by their own slide renderer; neither exports a name
+the root entry lacks; nothing but `*Detail` types and the other backend's
+renderer is root-only; and every `*Detail` type `NVEvents.ts` declares is
+exported from root.
+
+By hand, the same question:
+
+```bash
+names() {
+  tr '\n' ' ' < "$1" | grep -oE 'export (type )?\{[^}]*\} from' |
+  tr -d '{}' | sed 's/export \(type \)*//;s/ from//' | tr ',' '\n' |
+  sed 's/.* as //;s/^ *type *//;s/^ *//;s/ *$//' | grep -v '^$' | sort -u
+}
+diff <(names src/index.ts) <(names src/index.webgl2.ts) | grep '^<' | grep -v 'Detail$'
+```
+
+### Keeping the three files in step
+
+The backend entries are a mechanical function of the root entry: root, minus the
+`*Detail` names, with the header comment, the slide-renderer line and the default
+export swapped. Edit `src/index.ts` first and mirror the change into both backend
+files; the test above will tell you if you missed one.
+
+### Rebasing a branch that adds an export
+
+A long-lived branch that adds an export can collide with one that already landed,
+and git will not tell you. The re-export lines sit in different hunks, so the
+merge is clean; the duplicate becomes a `tsc` error only once both are in the same
+file:
+
+```
+src/index.ts(264,27): error TS2300: Duplicate identifier 'SliceTile'.
+src/index.ts(452,32): error TS2300: Duplicate identifier 'SliceTile'.
+```
+
+GitHub reporting a branch MERGEABLE is not evidence of anything here. Mergeable is
+a statement about text, not about types, and a branch that merges cleanly can
+still break `main` on the next typecheck. A branch already marked CONFLICTING is
+the safer case, because someone has to look at it.
+
+Before merging a branch that adds a public export and predates the last change to
+`src/index.ts`, check the symbol against all three entries on `main`:
+
+```bash
+git fetch origin
+for f in index index.webgl2 index.webgpu; do
+  printf '%-14s ' "$f"
+  git show "origin/main:packages/niivue/src/$f.ts" | grep -c '\bTheSymbol\b'
+done
+```
+
+Any non-zero count means the branch must drop its own line and widen the existing
+one instead.
+
+PR #170 is the worked example: it adds `SliceTile` and `projectMMToCanvas`,
+both of which #177 had already exported from all three entries, plus a genuinely
+new `CanvasTilePoint`. The rebase keeps only the new name.
+
+### Types named in public signatures
+
+A type that appears in a public getter, setter, method parameter or return type
+has to be exported from all three entries. Otherwise a consumer can call the
+method and still not be able to name what it hands back.
+
+`entryPoints.test.ts` does not catch this, and cannot as written. It checks that
+the three entries agree with each other, and that every `*Detail` type in
+`NVEvents.ts` is exported. A type that no entry exports is consistent across all
+three, so it passes. Export the types in a method's signature in the same commit
+as the method.
+
+To find what has already slipped through, list the PascalCase names used in
+`NVControlBase`'s public signatures and subtract the ones the root entry
+re-exports:
+
+```bash
+cd packages/niivue/src
+grep -oE '^  (async )?(get |set )?[a-zA-Z_][a-zA-Z0-9_]*\(.*' NVControlBase.ts \
+  | grep -oE '\b[A-Z][A-Za-z0-9_]+\b' | sort -u > /tmp/used.txt
+tr '\n' ' ' < index.ts | grep -oE 'export (type )?\{[^}]*\} from' | tr -d '{}' \
+  | sed 's/export \(type \)*//;s/ from//' | tr ',' '\n' \
+  | sed 's/.* as //;s/^ *type *//;s/^ *//;s/ *$//' | grep -v '^$' | sort -u > /tmp/exported.txt
+# keep only names this package declares as an exported type
+comm -23 /tmp/used.txt /tmp/exported.txt | while read -r t; do
+  grep -rqE "^export (type|interface|class|enum) $t\b" . --exclude-dir=node_modules && echo "$t"
+done
+```
+
+Read the output as candidates, not findings. The last filter drops builtins and
+private classes, but the scan still misses a type that appears only on a
+continuation line of a multi-line return type, so it under-reports. Confirm each
+hit is used in a genuinely public member before adding it to the entries.
+
+### Before removing an export
+
+An export in this package has consumers you will not find by searching
+`packages/niivue`. The extensions, `nv-ohif`, `nv-react`, `uikit`, the demo apps
+and `examples/` all import from `@niivue/niivue` by package name.
+
+Two steps, both required:
+
+```bash
+# 1. Search the whole workspace, enumerated -- never a remembered list of packages
+grep -rn '\bTheSymbol\b' --exclude-dir=node_modules --exclude-dir=dist packages apps
+
+# 2. Typecheck the dependents, not just this package
+bunx nx affected -t typecheck        # NOT --projects=niivue
+```
+
+`nx run-many`/`--projects=niivue` passes happily while a sibling package is
+broken, because the sibling's `typecheck` never runs. `nx affected` follows the
+`workspace:*` edges and catches it.
+
+This is not hypothetical. Issue #176 proposed removing five exports on the
+finding that they had no consumers. Every one of the five had a consumer:
+`NVWorker` in `nv-ext-drawing` and `nv-ext-image-processing`, `slice2DToMM` in
+`nv-ohif`, `nii2volume` in an e2e spec and a demo bundle, and the two drawing
+helpers in `examples/slides.js`. The search that missed them used a
+hand-remembered package list and a niivue-scoped gate.
+
+### The single-backend distributions are not backend-isolated
+
+Separate from the export policy, and worth knowing before reasoning about what a
+subpath "costs": `dist/niivue.webgl2.js` and `dist/niivue.webgpu.js` currently
+share three of their five chunks, including the 1.83 MB one that holds both
+backends. The path is `NVControlBase.ts` -> `control/viewBoth.ts` -> both
+`gl/NVViewGL.ts` and `wgpu/NVViewGPU.ts` (`control/interactions.ts`,
+`control/viewWebGL2.ts` and `control/viewWebGPU.ts` reach it the same way), a
+static import that no entry point can tree-shake away. So the subpaths today
+select a default export, not a smaller bundle. The slide renderers *are* split
+per backend, because the entry point should not be the thing that cements the
+leak.
+
+Tracked as https://github.com/niivue/mono/issues/175, with the cause and the fix
+written up there. Delete this section when it lands.
+
 ## Code style and conventions
 
 Linting/formatting is **Biome**, configured in the monorepo root `biome.json`. See the root `AGENTS.md` for the full rule list; key rules enforced here:
@@ -367,6 +557,13 @@ Each `SliceTile` caches `mvpMatrix`, `planeNormal`, and `planePoint` during rend
 
 The built-in wheel zoom (`control/interactions.ts`, `isPanZoomMode` branch) anchors on `crosshairPos`. It holds that point still by calling `NVTransforms.zoomPan2DAbout`, which is the exact inverse of the window `calculateMvpMatrix2D` builds: `pan' = (zoom / newZoom) * (d + pan) - d` with `d = anchorMM - extentCentre`. Keep the two in step — a change to the ortho window's zoom or pan handling must be mirrored there, or the crosshair drifts again (issue #68).
 
+**`pan2Dxyzmm` is a `vec4` (Float32Array) — never test a value read back out of it
+for exact equality** (0.4 returns 0.40000000596). `stepZoom2D`
+(`src/math/NVTransforms.ts`) detects a stalled zoom notch with
+`Math.abs(next - zoom) < ZOOM_2D_SNAP / 2`, not `next === zoom`: the float32
+round-trip made the equality unreachable, jamming the wheel zoom at 0.4 in both
+directions. Pinned by `bothEndsOfTheRangeAreReachable` in `NVTransforms.test.ts`.
+
 ## Format extensibility
 
 All format readers use Vite's `import.meta.glob` for automatic discovery. To add a new reader:
@@ -375,6 +572,12 @@ All format readers use Vite's `import.meta.glob` for automatic discovery. To add
 3. Auto-registered at build time — no manual wiring needed
 
 Shared utilities: `NVLoader.buildExtensionMap()` (extension→module maps), `NVGz.maybeDecompress()` (transparent gzip).
+
+**A reader's input may be a Node `Buffer`, whose `slice()` is `subarray()`.** Take
+`.buffer` only from a fresh copy (`new Uint8Array(raw.subarray(a, b)).buffer`), or
+the caller receives the whole underlying allocation instead of the slice (and, for
+a small pooled Buffer, at a non-zero `byteOffset`). Browser loads never hit this —
+fetch yields offset-0 buffers — so `mgh.test.ts` passes a `Buffer` explicitly.
 
 Same pattern for: mesh readers (`mesh/readers/`), volume readers (`volume/readers/`), tract readers (`mesh/tracts/readers/`), connectome readers (`mesh/connectome/readers/`), layer readers (`mesh/layers/readers/`), volume transforms (`volume/transforms/`).
 
@@ -1300,7 +1503,49 @@ Pure-data layout engine in `view/NVSliceLayout.ts`. Computes `SliceTile[]` from 
 
 Priority: mosaic string > render-only > single slice > hero layout > multiplanar.
 
+The scale ruler (`view/NVRuler.ts`) takes px-per-mm from `mmPerPixel2D` so it
+tracks the 2D zoom (`pan2Dxyzmm` is threaded in by both renderers), and reads
+`screen.fovMM` as tile-local `[u, v, depth]`. Pinned by `view/NVRuler.test.ts`.
+
 **`SliceTile`** key fields: `leftTopWidthHeight`, `axCorSag`, `screen` (ortho mm bounds), `azimuth`/`elevation`, `sliceMM` (mosaic mm position), `renderOrientation`, `crossLines`, `showLabels`. Cached `mvpMatrix`/`planeNormal`/`planePoint` populated during render for picking.
+
+### Single-slice canvas fill (`isSingleViewFillCanvas`, default **true**)
+
+A lone AXIAL/CORONAL/SAGITTAL tile takes the whole canvas instead of being
+letterboxed to the slice's aspect ratio; the stored mm window
+(`screen.mnMM`/`mxMM`/`fovMM`, in-plane indices 0 and 1) is widened about its own
+centre by the same ratio. Scale (mm-per-pixel) and centre are unchanged — the slice
+lands on identical pixels — only the clipping rect grows, so a zoom spends the old
+letterbox margins on image instead of cropping them away. Excluded: multiplanar,
+render, mosaic, hero, custom layouts.
+
+- **The widened span is stored PRE-zoom**, and the fill branch is taken only for a
+  positive finite fit scale. A window sized from the live zoom reintroduces the
+  crosshair drift of issue #68 (`zoomPan2DAbout` assumes a fixed window that zoom
+  narrows); a zero/infinite scale puts NaN mm bounds in the projection. A filled
+  slice also leaves `fitSlicesAndGraph` no letterbox slack to give the 4D graph.
+  All pinned in `view/NVSliceLayout.test.ts`.
+- **`fovMM` stays the DATA's span; only `mnMM`/`mxMM` widen.** They are equal on
+  every other tile. Chrome that must size against the image rather than the empty
+  margin reads `fovMM` (the scale ruler does, or its bar outgrows a small volume);
+  anything projecting the window reads `mnMM`/`mxMM`.
+- **No edge-voxel smear into the new margins.** Both backends draw a unit quad in
+  TEXTURE space (`gl/sliceShader.ts`, `wgpu/slice.wgsl`), so its corners are the
+  volume's mm extents and sampler wrap mode is unreachable.
+- **The whole canvas is a live tile.** `hitTest`/`screenSlicePick` clamp to the
+  TILE, which used to equal the volume extents, so picks in the former letterbox
+  margin land outside the volume. `setCrosshairPos` clamps frac to [0,1] and
+  `buildDragReleaseInfo` clamps voxels to `dimsRAS` (its mm fields stay unclamped —
+  they describe the real gesture), but a PEN stroke straying into blank margin
+  paints the boundary voxel rather than missing, because `drawPoint` clamps.
+- **Old documents reopen filled.** `documentSettings.fillGroup` writes
+  `LAYOUT_DEFAULTS` for any key a document omits, and `loadDocument` resets an
+  explicit `false` unless called with `{ fill: 'current' }`. Standard for every
+  layout default; noted because this one is visible.
+- **Plumbing follows the `isRadiological` pattern**; NVDocument serializes the
+  layout group generically. Model-to-config mapping lives ONCE in
+  `NVSliceLayout.fitSlicesFromModel`, which both renderers call — a flag threaded
+  into one backend is a parity break.
 
 ### Mosaic string format
 
@@ -1392,7 +1637,15 @@ Exported from `volume/utils.ts` and from the package root. Returns `Float32Array
 
 ### Public exports
 
-From package root (`src/index.ts`): `NVExtensionContext`, `computeSlicePointerEvent`, `getImageDataRAS`, and types `BackgroundVolumeAccess`, `DrawingAccess`, `DrawingDims`, `NVExtensionEventMap`, `SharedBufferHandle`, `SlicePointerEvent`.
+From all three entry points (see **Entry points and public exports**):
+`NVExtensionContext`, `getImageDataRAS`, and types `BackgroundVolumeAccess`,
+`DrawingAccess`, `DrawingDims`, `MrsVolumeAccess`, `NVExtensionEventMap`,
+`SharedBufferHandle`, `SlicePointerEvent`.
+
+`computeSlicePointerEvent` is **not** exported from any entry point. It lives in
+`extension/context.ts` and is called from `control/interactions.ts`; this section
+used to list it as public, which it never was. Either re-export it from all three
+entries or leave it internal, but the doc should not promise it.
 
 ## Web Workers
 

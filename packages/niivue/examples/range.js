@@ -120,6 +120,14 @@ const SYNTHETIC_DEFAULT_WINDOW = { min: 24, max: 210 }
 //
 // A store outside the Open SciVis bucket sets `base` (an absolute URL that the
 // store id is appended to) instead of resolving through the local mirror.
+//
+// `defaultWindow` is OPTIONAL. Omit it and core derives a 2%-98% window from the
+// coarse floor it builds anyway, which is what a store nobody has characterised
+// should get. The five that keep one keep it because the comment beside each
+// records a choice percentiles cannot make: putting calMin ABOVE a background
+// shoulder (air, resin, embedding medium) so the background clips to black and
+// the whole ramp is spent on tissue. A 2nd percentile sits inside those peaks,
+// not past them.
 const HOA_BASE =
   'https://storage.googleapis.com/ucl-hip-ct-35a68e99feaae8932b1d44da0358940b/'
 const OMEZARR_STORES = {
@@ -127,19 +135,21 @@ const OMEZARR_STORES = {
     id: 'stent.ome.zarr',
     name: 'Stent OME-Zarr',
     levels: [2],
-    defaultWindow: { min: 0, max: 1200 },
   },
   pawpawsaurus: {
     id: 'pawpawsaurus.ome.zarr',
     name: 'Pawpawsaurus OME-Zarr',
     levels: [3, 2, 1, 0],
+    // A fossil skull still in its matrix, so the same shoulder problem as the
+    // biological microCT below: the derived 2%-98% window is 12075-48463, whose
+    // calMin sits inside the matrix rather than past it, and the skull washes
+    // out to flat white. calMin above the matrix spends the ramp on bone.
     defaultWindow: { min: 30269, max: 56893 },
   },
   richtmyer_meshkov: {
     id: 'richtmyer_meshkov.ome.zarr',
     name: 'Richtmyer-Meshkov OME-Zarr',
     levels: [4, 3, 2, 1, 0],
-    defaultWindow: { min: 0, max: 230 },
   },
   // Biological microCT.
   chameleon: {
@@ -471,6 +481,12 @@ const els = {
   lodOpacity: el('lodOpacity'),
   lodOpacityVal: el('lodOpacityVal'),
   interp: el('interp'),
+  illum: el('illum'),
+  illumVal: el('illumVal'),
+  gradOpacity: el('gradOpacity'),
+  gradOpacityVal: el('gradOpacityVal'),
+  silhouette: el('silhouette'),
+  silhouetteVal: el('silhouetteVal'),
   blocks: el('blocks'),
   crosshair: el('crosshair'),
   reload: el('reload'),
@@ -663,9 +679,10 @@ function formatWindow(win) {
 
 function setDefaultWindowForSelectedSource() {
   const store = currentStore()
-  els.window.value = formatWindow(
-    store ? store.defaultWindow : SYNTHETIC_DEFAULT_WINDOW,
-  )
+  const win = store ? store.defaultWindow : SYNTHETIC_DEFAULT_WINDOW
+  // Empty means "no opinion": the load passes no calMin/calMax, core derives
+  // one, and the reload writes what it chose back into the field.
+  els.window.value = win ? formatWindow(win) : ''
 }
 
 async function fetchJson(url) {
@@ -944,7 +961,9 @@ async function loadOmezarrSource(storeDef, serial) {
     dtype,
     datatypeCode: dtypeInfo.code,
     numBitsPerVoxel: dtypeInfo.bits,
-    defaultWindow: { ...storeDef.defaultWindow },
+    defaultWindow: storeDef.defaultWindow
+      ? { ...storeDef.defaultWindow }
+      : null,
     chunkGrid,
     chunkShape,
     chunkCount: chunkGrid[0] * chunkGrid[1] * chunkGrid[2],
@@ -1401,6 +1420,73 @@ function applyInterp() {
   if (!nv) return
   // Pure render-time setting: no re-stream, and the setter already redraws.
   nv.volumeIsCubicInterpolation = els.interp.value === 'cubic'
+}
+
+// The three settings that consume the PRECOMPUTED gradient texture: matcap
+// illumination, gradient opacity and silhouette. They share one gate in core
+// (`_needsGradient()` = any of the three above 0), and on a chunked volume that
+// gate decides whether each brick pays a gradient pass on upload.
+//
+// All three act on the 3D RAY-MARCH ONLY, and the page opens on multiplanar, so
+// set the Layout control to `render` before expecting them to do anything.
+//
+// This is why they sit on the streaming demo and not only on vox.gradopacity.
+// All three default to 0 here, so the page streams UNLIT: no per-brick gradient
+// pass at all, which is what lets a fully exploded volume (every brick requested
+// every frame) stream without flooding the upload pump -- see syncExplode.
+//
+// Raising any of them off 0 flips the gate, and core's
+// `_refreshUnlitChunksForLighting` reacts by remapping the residency manager to
+// an empty set: every resident brick is evicted and re-streamed, this time with
+// its gradient built. That is a whole working set of re-uploads on one slider
+// step, and it is deliberately visible -- the loading badge fires and the HUD's
+// requested/completed, cache and decoded rows show where the bytes came from
+// (usually the decoded-chunk tier rather than the network, which is the tier
+// doing its job). Once lit, moving any of the three within the non-zero range
+// costs nothing extra: the gate is already true, so nothing re-streams.
+//
+// Dropping all three back to 0 does NOT free the gradients or re-stream. The
+// bricks stay as they are and the shader simply stops sampling them.
+//
+// Budget note: the residency accounting (`chunkResidentBytes`) charges every
+// brick 8 bytes/voxel -- RGBA plus gradient -- whether or not a gradient was
+// built, so an unlit stream is charged for memory it is not holding and the
+// resident brick count does not change when you turn lighting on. The VRAM is
+// genuinely saved; the budget just does not credit it yet.
+function applyIllumination() {
+  const v = Number(els.illum.value) || 0
+  els.illumVal.textContent = v.toFixed(2)
+  if (!nv) return
+  // The default matcap is applied by the controller, so there is nothing to
+  // load here; the setter already redraws.
+  nv.volumeIllumination = v
+}
+
+// Alpha suppression by gradient magnitude. The most expensive setting on this
+// page, and not because of the gradient: emptying out homogeneous interior
+// stops rays saturating and terminating early, so each one marches the full
+// depth. Pair it with a lower sample rate on the big stores.
+function applyGradientOpacity() {
+  const v = Number(els.gradOpacity.value) || 0
+  els.gradOpacityVal.textContent = v.toFixed(2)
+  if (!nv) return
+  nv.volumeGradientOpacity = v
+}
+
+// Fresnel rim term: fade material whose normal faces the camera. On this page
+// it doubles as the halo check. A brick's gradient is estimated with a central
+// difference that reaches one voxel past each face, so with nothing to read
+// there every cut face reports a hard edge and rims brightly -- turn explode up
+// and slide silhouette in, and the rims either follow the specimen (halo) or
+// outline the brick boxes (no halo). The default synthetic shard source is the
+// negative control: halo 0 by construction (see createChunkPlan), so its bricks
+// DO outline. Pick an OME-Zarr source, which streams at `streamingChunkHalo`
+// (3 by default, `?halo=N` to override), for the positive case.
+function applySilhouette() {
+  const v = Number(els.silhouette.value) || 0
+  els.silhouetteVal.textContent = v.toFixed(2)
+  if (!nv) return
+  nv.volumeSilhouette = v
 }
 
 function applyBlocks() {
@@ -1875,8 +1961,9 @@ async function runReload(token, options) {
           // `name` (what the HUD/labels show) stays activeSource.name.
           id: `${activeSource.name}#${token}`,
           name: activeSource.name,
-          calMin: win.min,
-          calMax: win.max,
+          // No window means core places one from the coarse floor; supplying
+          // one suppresses that, which is what the characterised stores want.
+          ...(win ? { calMin: win.min, calMax: win.max } : {}),
           colormap: els.colormap.value,
           // Policy (where the detail goes, how many bricks it may cost) comes
           // from the named plan; only the VRAM ceiling is pinned by the demo,
@@ -1904,6 +1991,15 @@ async function runReload(token, options) {
         return
       }
       activeCv = cv
+      if (!win) {
+        // Percentiles land on long floats; the field is an editable control, so
+        // show a readable number rather than 15 significant digits.
+        const tidy = (value) => Number(value.toPrecision(6))
+        els.window.value = formatWindow({
+          min: tidy(cv.volume.calMin),
+          max: tidy(cv.volume.calMax),
+        })
+      }
       // New streamed volume is resident; drop the one(s) it displaced.
       await removeSceneVolumes(stale)
       chunkPlan = activeCv.currentPlan
@@ -1970,6 +2066,9 @@ async function main() {
   applyLodCompensation()
   applyLodOpacity()
   applyInterp()
+  applyIllumination()
+  applyGradientOpacity()
+  applySilhouette()
 
   els.source.addEventListener('change', async () => {
     setDefaultWindowForSelectedSource()
@@ -2000,6 +2099,12 @@ async function main() {
   els.lodComp.addEventListener('input', applyLodCompensation)
   els.lodOpacity.addEventListener('input', applyLodOpacity)
   els.interp.addEventListener('change', applyInterp)
+  // Render-time settings, but the first step off 0 re-streams the working set
+  // (see applyIllumination). 'input' is still right: the re-stream happens once
+  // on the crossing, not per slider tick.
+  els.illum.addEventListener('input', applyIllumination)
+  els.gradOpacity.addEventListener('input', applyGradientOpacity)
+  els.silhouette.addEventListener('input', applySilhouette)
   els.blocks.addEventListener('change', applyBlocks)
   els.crosshair.addEventListener('change', applyCrosshair)
   els.reload.addEventListener('click', () => {

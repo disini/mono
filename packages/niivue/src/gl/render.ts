@@ -180,7 +180,18 @@ interface ChunkUniforms {
 interface SingleTexEntry {
   kind: 'single'
   volumeTexture: WebGLTexture
-  volumeGradientTexture: WebGLTexture
+  /**
+   * Null when the volume was uploaded with no gradient consumer switched on --
+   * the gradient pass is skipped entirely in that case. `_ensureSingleGradients`
+   * fills it in on the first frame after one turns on.
+   */
+  volumeGradientTexture: WebGLTexture | null
+  /**
+   * Dims the gradient pass was (or will be) built with. Stored rather than
+   * re-derived so a deferred build uses exactly the value its upload would
+   * have, and WebGL cannot query a texture's size to recover it.
+   */
+  gradDims: Vec3f
   /** Full RAS volume dims — WebGL cannot query a texture's size. */
   dims: Vec3f
   /** Categorical volume: never smooth its baked label colors (see _cubicVolumeSafe). */
@@ -352,6 +363,16 @@ export class VolumeRenderer extends NVRenderer {
   // concentric banding on smooth structures (measured ring contrast is flat from 1
   // to 4) -- that banding is in the integrand, not in how densely it is sampled.
   sampleRate = VOLUME_DEFAULTS.sampleRate
+  // Which stencil the overlay/drawing passes estimate their own gradient with
+  // (from md.volume.layerGradientMode). The background volume reads a
+  // precomputed gradient texture and is unaffected. See LAYER_GRADIENT_MODE.
+  layerGradientMode = VOLUME_DEFAULTS.layerGradientMode
+  // Background-volume gradient opacity and silhouette (Fresnel rim), set by the
+  // view each frame from md.volume. Both read the precomputed gradient
+  // texture's magnitude/direction, so a non-zero value also means the gradient
+  // pass must run even when the volume is unlit (see _needsGradient).
+  gradientOpacity = VOLUME_DEFAULTS.gradientOpacity
+  silhouette = VOLUME_DEFAULTS.silhouette
   // Tricubic B-spline instead of hardware trilinear in the background fine pass
   // (from md.volume.isCubicInterpolation). Cures the blocky texel staircase that
   // C0 trilinear leaves on band edges, at 8 fetches per sample instead of 1.
@@ -390,6 +411,10 @@ export class VolumeRenderer extends NVRenderer {
   // True once any chunk was uploaded without a real gradient (unlit). If lighting
   // is later enabled, those chunks are re-streamed so they gain gradients.
   private _uploadedUnlit = false
+  // Dims for the non-cached single-texture volume's deferred gradient build.
+  // The single-texture analogue of _uploadedUnlit: non-null and paired with a
+  // null volumeGradientTexture means "gradient skipped, build it if asked".
+  private _singleGradDims: Vec3f | null = null
   // Set when the active volume is chunked; null for single-texture volumes.
   // draw() branches on this to run the multi-chunk loop.
   private _activeChunked: ChunkedTexEntry | null = null
@@ -653,16 +678,29 @@ export class VolumeRenderer extends NVRenderer {
     this._activeChunked = null
     this._cubicVolumeSafe = !vol.colormapLabel
 
+    // This volume is not chunked any more: its plan was cleared, or the same
+    // url was reloaded as a plain volume. Drop the chunked entry now, because
+    // nothing downstream will. It would otherwise sit in `_texCache` for the
+    // life of the renderer holding every brick texture, still driven by
+    // `beginChunkFrame`, and still counted by `chunkStreamStats` -- which then
+    // reports a brick stream for a single-texture volume. The `perVolumeCache`
+    // branch below cleared it, but only multi-instance callers take that
+    // branch, so the ordinary path leaked.
+    const priorEntry = cacheKey ? this._texCache.get(cacheKey) : undefined
+    if (priorEntry?.kind === 'chunked') {
+      this._evictTexEntry(gl, cacheKey, priorEntry)
+    }
+
     if (perVolumeCache) {
       // Multi-instance / global3d: cache each volume's texture by key so the
       // render loop can switch the active texture per tile via
       // bindCachedVolume. (volumeOrientCache is a single slot and cannot serve
       // per-tile volume switching.)
-      let entry = cacheKey ? this._texCache.get(cacheKey) : undefined
-      if (entry && entry.kind !== 'single') {
-        this._destroyTexEntry(gl, entry)
-        entry = undefined
-      }
+      // The chunked case was evicted above, so anything still here is single.
+      // Narrowing on `kind` rather than asserting keeps that an invariant the
+      // compiler checks.
+      const prior = cacheKey ? this._texCache.get(cacheKey) : undefined
+      let entry = prior?.kind === 'single' ? prior : undefined
       if (!entry) {
         const volumeTexture = await orientOverlay.overlay2Texture(
           gl,
@@ -674,16 +712,22 @@ export class VolumeRenderer extends NVRenderer {
           modParams,
         )
         gl.bindTexture(gl.TEXTURE_3D, null)
-        const dims = [vol.hdr.dims[1], vol.hdr.dims[2], vol.hdr.dims[3]]
-        const volumeGradientTexture = gradient.volume2TextureGradientRGBA(
-          gl,
-          volumeTexture,
-          dims as [number, number, number],
-        )
+        const gradDims = [
+          vol.hdr.dims[1],
+          vol.hdr.dims[2],
+          vol.hdr.dims[3],
+        ] as Vec3f
+        // Skipped outright when nothing reads it. The pass is a per-z-slice
+        // FBO render over the whole volume and the texture it produces is the
+        // size of the volume, so an unlit scene pays neither.
+        const volumeGradientTexture = this._needsGradient()
+          ? gradient.volume2TextureGradientRGBA(gl, volumeTexture, gradDims)
+          : null
         entry = {
           kind: 'single',
           volumeTexture,
           volumeGradientTexture,
+          gradDims,
           dims: [rasDims[0], rasDims[1], rasDims[2]],
           isLabel: !!vol.colormapLabel,
         }
@@ -691,6 +735,7 @@ export class VolumeRenderer extends NVRenderer {
       }
       this.volumeTexture = entry.volumeTexture
       this.volumeGradientTexture = entry.volumeGradientTexture
+      this._singleGradDims = entry.gradDims
       this._activeDims = entry.dims
     } else {
       // Normal single-volume path: orient-texture cache + modulation. Scalar
@@ -722,15 +767,20 @@ export class VolumeRenderer extends NVRenderer {
         this.volumeTexture = this.volumeOrientCache.outputTexture
       }
       gl.bindTexture(gl.TEXTURE_3D, null)
-      const dims = [vol.hdr.dims[1], vol.hdr.dims[2], vol.hdr.dims[3]]
+      const gradDims = [
+        vol.hdr.dims[1],
+        vol.hdr.dims[2],
+        vol.hdr.dims[3],
+      ] as Vec3f
       if (this.volumeGradientTexture) {
         gl.deleteTexture(this.volumeGradientTexture)
       }
-      this.volumeGradientTexture = gradient.volume2TextureGradientRGBA(
-        gl,
-        this.volumeTexture,
-        dims as [number, number, number],
-      )
+      // See the cached branch: skipped when nothing reads it, and remembered
+      // (via _singleGradDims) so it can be filled in later without a reupload.
+      this._singleGradDims = gradDims
+      this.volumeGradientTexture = this._needsGradient()
+        ? gradient.volume2TextureGradientRGBA(gl, this.volumeTexture, gradDims)
+        : null
       this._activeDims = [rasDims[0], rasDims[1], rasDims[2]]
     }
 
@@ -749,10 +799,10 @@ export class VolumeRenderer extends NVRenderer {
    * overlay — each gets its own cache entry + residency manager, keyed by its
    * own url/name, and the per-frame pump (pumpChunkUploads) drives them all.
    *
-   * Halo is 3 (not the [1,1,1] default): the per-chunk gradient runs a sobel
-   * (radius 1) + blur (radius 1) stencil, and trilinear sampling at the data
-   * edge reaches one voxel further, so the gradient is only seam-free between
-   * chunks with a 3-voxel halo.
+   * Halo is 3 (not the [1,1,1] default): the per-chunk gradient taps at +-0.7
+   * voxel through a LINEAR sampler, so it reads one voxel past the chunk, and
+   * trilinear sampling at the data edge reaches one further -- a 3-voxel halo
+   * keeps the gradient seam-free between chunks with a margin.
    */
   private async _ensureChunkedVolumeEntry(
     gl: WebGL2RenderingContext,
@@ -803,7 +853,7 @@ export class VolumeRenderer extends NVRenderer {
           gl,
           vol,
           existing.plan,
-          () => this.gradientAmount > 0,
+          () => this._needsGradient(),
           existing.decoded,
         )
         existing.uploader.dispose()
@@ -816,7 +866,7 @@ export class VolumeRenderer extends NVRenderer {
       }
       return existing
     }
-    if (existing) this._destroyTexEntry(gl, existing)
+    if (existing) this._evictTexEntry(gl, cacheKey, existing)
     // The entry holds the live uploader so an in-place plan swap can replace it;
     // the prefetch hook reads it off `entry` (not a creation closure) so it
     // always targets the current plan.
@@ -831,7 +881,7 @@ export class VolumeRenderer extends NVRenderer {
         gl,
         vol,
         plan,
-        () => this.gradientAmount > 0,
+        () => this._needsGradient(),
         decoded,
       ),
       plan,
@@ -901,7 +951,7 @@ export class VolumeRenderer extends NVRenderer {
       gl,
       vol,
       newPlan,
-      () => this.gradientAmount > 0,
+      () => this._needsGradient(),
       entry.decoded,
     )
     entry.uploader.dispose()
@@ -979,6 +1029,7 @@ export class VolumeRenderer extends NVRenderer {
     this._cubicVolumeSafe = !entry.isLabel
     this.volumeTexture = entry.volumeTexture
     this.volumeGradientTexture = entry.volumeGradientTexture
+    this._singleGradDims = entry.gradDims
     this._activeDims = entry.dims
     return true
   }
@@ -1290,6 +1341,7 @@ export class VolumeRenderer extends NVRenderer {
     this._frameNow = performance.now()
     this._fadeActive = false
     this._refreshUnlitChunksForLighting()
+    this._ensureSingleGradients()
     for (const entry of this._texCache.values()) {
       if (entry.kind !== 'chunked') continue
       // Predict from the frame that just ended, before its record is cleared.
@@ -1352,8 +1404,59 @@ export class VolumeRenderer extends NVRenderer {
     }
   }
 
+  /**
+   * Whether the per-chunk gradient pass must run. Lighting is not the only
+   * consumer: gradient opacity and silhouette read the same texture's magnitude
+   * and direction, so an unlit volume with either turned up still needs it.
+   */
+  private _needsGradient(): boolean {
+    return (
+      this.gradientAmount > 0 || this.gradientOpacity > 0 || this.silhouette > 0
+    )
+  }
+
+  /**
+   * Build any non-chunked gradient texture that the upload path deferred.
+   *
+   * The single-texture analogue of `_refreshUnlitChunksForLighting`: an unlit
+   * volume skips the gradient pass at upload, so switching illumination,
+   * gradient opacity or silhouette on has to fill it in. Called once per frame
+   * before the tile loop; a no-op pointer test once the texture exists, and
+   * the texture outlives the toggle so flipping the feature off and on again
+   * does not rebuild it.
+   */
+  private _ensureSingleGradients(): void {
+    const gl = this._gl
+    if (!gl || !this._needsGradient()) return
+    for (const entry of this._texCache.values()) {
+      if (entry.kind !== 'single' || entry.volumeGradientTexture) continue
+      entry.volumeGradientTexture = gradient.volume2TextureGradientRGBA(
+        gl,
+        entry.volumeTexture,
+        entry.gradDims,
+      )
+      // updateVolume / bindCachedVolume copied the then-null pointer into the
+      // live slot, so re-point it at the texture just built.
+      if (entry.volumeTexture === this.volumeTexture) {
+        this.volumeGradientTexture = entry.volumeGradientTexture
+      }
+    }
+    if (
+      !this._activeChunked &&
+      this.volumeTexture &&
+      !this.volumeGradientTexture &&
+      this._singleGradDims
+    ) {
+      this.volumeGradientTexture = gradient.volume2TextureGradientRGBA(
+        gl,
+        this.volumeTexture,
+        this._singleGradDims,
+      )
+    }
+  }
+
   private _refreshUnlitChunksForLighting(): void {
-    if (this.gradientAmount <= 0 || !this._uploadedUnlit) return
+    if (!this._needsGradient() || !this._uploadedUnlit) return
     this._uploadedUnlit = false
     for (const entry of this._texCache.values()) {
       if (entry.kind !== 'chunked') continue
@@ -1470,8 +1573,31 @@ export class VolumeRenderer extends NVRenderer {
       if (ci >= 0) this._combinedOverlayEntries.splice(ci, 1)
     } else {
       gl.deleteTexture(entry.volumeTexture)
-      gl.deleteTexture(entry.volumeGradientTexture)
+      // Null when the volume was uploaded with no gradient consumer on.
+      if (entry.volumeGradientTexture) {
+        gl.deleteTexture(entry.volumeGradientTexture)
+      }
     }
+  }
+
+  /**
+   * Release an entry's GPU resources AND drop it from the cache.
+   *
+   * Destroying without deleting is the dangerous half: the entry stays in
+   * `_texCache`, so every method that iterates the map -- `beginChunkFrame`,
+   * the gradient refreshes, `chunkStreamStats` -- can still reach a destroyed
+   * manager and a disposed uploader. The replace-in-place call sites only
+   * re-`set` the key after an await, so a frame landing in that window sees the
+   * dead entry. Always evict through here rather than pairing the two calls by
+   * hand.
+   */
+  private _evictTexEntry(
+    gl: WebGL2RenderingContext,
+    key: string | undefined,
+    entry: TexCacheEntry,
+  ): void {
+    this._destroyTexEntry(gl, entry)
+    if (key) this._texCache.delete(key)
   }
 
   /** Release any cached volume textures whose key is not in `keepKeys`. */
@@ -1480,8 +1606,7 @@ export class VolumeRenderer extends NVRenderer {
     if (!gl) return
     for (const [key, entry] of this._texCache) {
       if (keepKeys.has(key)) continue
-      this._destroyTexEntry(gl, entry)
-      this._texCache.delete(key)
+      this._evictTexEntry(gl, key, entry)
     }
   }
 
@@ -2192,11 +2317,11 @@ export class VolumeRenderer extends NVRenderer {
     // the crosshair to the far face of a clipped volume), which silently
     // blanked the entire volume. WebGPU already branches on the chunked entry
     // before its equivalent guard.
-    if (
-      !this._activeChunked &&
-      (!this.volumeTexture || !this.volumeGradientTexture)
-    )
-      return
+    // Only the volume texture is required. volumeGradientTexture is legitimately
+    // null on an unlit volume (the gradient pass is skipped at upload), and the
+    // shader's needsGradient branch is false in exactly that case, so a
+    // placeholder is bound below and never sampled.
+    if (!this._activeChunked && !this.volumeTexture) return
 
     const shader = this.shader
     const indexCount = this.cube.indices.length
@@ -2351,7 +2476,12 @@ export class VolumeRenderer extends NVRenderer {
       gl.activeTexture(gl.TEXTURE0)
       gl.bindTexture(gl.TEXTURE_3D, this.volumeTexture)
       gl.activeTexture(gl.TEXTURE2)
-      gl.bindTexture(gl.TEXTURE_3D, this.volumeGradientTexture)
+      // Placeholder when the volume is unlit: the sampler must have a complete
+      // texture bound even though the shader never reads it.
+      gl.bindTexture(
+        gl.TEXTURE_3D,
+        this.volumeGradientTexture || this.placeholderOverlay,
+      )
       // Non-chunked: pass-through (identity) tiled-volume uniforms so the
       // cube renders as its own [0,1] tex space exactly as before.
       this._setChunkUniforms(gl, shader, {
@@ -2390,6 +2520,14 @@ export class VolumeRenderer extends NVRenderer {
       gl.uniform3fv(shader.uniforms.rayStepTexVox, u.rayStepTexVox)
     if (shader.uniforms.rayVoxSampleRate)
       gl.uniform1f(shader.uniforms.rayVoxSampleRate, this.sampleRate)
+    if (shader.uniforms.layerGradMode)
+      gl.uniform1f(shader.uniforms.layerGradMode, this.layerGradientMode)
+    // Background-only alpha modulation from the precomputed gradient: 0 is a
+    // no-op for both. Mirrors the offset-500/504 lanes in wgpu/render.ts.
+    if (shader.uniforms.gradientOpacity)
+      gl.uniform1f(shader.uniforms.gradientOpacity, this.gradientOpacity)
+    if (shader.uniforms.silhouettePower)
+      gl.uniform1f(shader.uniforms.silhouettePower, this.silhouette)
     const cubic =
       this.isCubicInterpolation &&
       this._cubicVolumeSafe &&
