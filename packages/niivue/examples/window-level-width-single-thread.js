@@ -1,7 +1,7 @@
 // @ts-check
 
-import NiiVue, { SHOW_RENDER } from '../src/index.ts'
 import { runDcm2niix } from '@niivue/nv-ext-dcm2niix'
+import NiiVue, { SHOW_RENDER } from '../src/index.ts'
 
 // Diagnostic: show script is running
 console.log('Window/Level demo script loaded')
@@ -124,7 +124,7 @@ function startBenchmark() {
     width: widthSlider.value,
   }
   benchmarkRate.disabled = true
-  benchmarkBtn.textContent = '停止测试'
+  benchmarkBtn.textContent = 'Stop Test'
   windowUpdateStats = {
     startedAt: performance.now(),
     count: 0,
@@ -178,7 +178,7 @@ function stopBenchmark() {
   widthSlider.value = benchmark.width
   benchmark = null
   benchmarkRate.disabled = false
-  benchmarkBtn.textContent = '自动测试 10 秒'
+  benchmarkBtn.textContent = 'Run 10-Second Automated Test'
   updateSliderValues()
   applyWindow()
 }
@@ -330,9 +330,9 @@ nv1.addEventListener('volumeLoaded', (e) => {
 
 nv1.addEventListener('volumeLoadedFailed', (e) => {
   console.error('Volume loading failed:', e.detail)
-  statusEl.textContent = 'Failed: ' + e.detail.message
+  statusEl.textContent = `Failed: ${e.detail.message}`
   setLoading(false)
-  alert('Failed to load volume: ' + e.detail.message)
+  alert(`Failed to load volume: ${e.detail.message}`)
 })
 
 const canvasEl = document.getElementById('gl')
@@ -395,8 +395,8 @@ dicomInput.addEventListener('change', async () => {
   } catch (err) {
     console.error('DICOM loading error:', err)
     setLoading(false)
-    statusEl.textContent = 'Error: ' + err.message
-    alert('Failed to load DICOM: ' + err.message)
+    statusEl.textContent = `Error: ${err.message}`
+    alert(`Failed to load DICOM: ${err.message}`)
   }
 })
 
@@ -459,7 +459,7 @@ canvasContainer.addEventListener('drop', async (e) => {
   canvasContainer.style.borderColor = ''
 
   const files = []
-  if (e.dataTransfer && e.dataTransfer.items) {
+  if (e.dataTransfer?.items) {
     try {
       const { traverseDataTransferItems } = await import(
         '@niivue/nv-ext-dcm2niix'
@@ -467,7 +467,7 @@ canvasContainer.addEventListener('drop', async (e) => {
       const droppedFiles = await traverseDataTransferItems(e.dataTransfer.items)
       files.push(...droppedFiles)
     } catch {
-      if (e.dataTransfer && e.dataTransfer.files) {
+      if (e.dataTransfer?.files) {
         files.push(...Array.from(e.dataTransfer.files))
       }
     }
@@ -488,6 +488,8 @@ canvasContainer.addEventListener('drop', async (e) => {
 // Helper to create a FileList-like object
 function createFileList(files) {
   const dataTransfer = new DataTransfer()
-  files.forEach((file) => dataTransfer.items.add(file))
+  files.forEach((file) => {
+    dataTransfer.items.add(file)
+  })
   return dataTransfer.files
 }

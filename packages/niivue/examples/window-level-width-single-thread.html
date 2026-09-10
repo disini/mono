@@ -145,14 +145,14 @@
       <button id="resetBtn" type="button" title="Reset to full range" disabled>Reset</button>
 
       <div class="control-group">
-        <label for="benchmarkRate">自动测试目标频率</label>
+        <label for="benchmarkRate">Automated Test Target Rate</label>
         <select id="benchmarkRate">
-          <option value="60">60 次/秒</option>
-          <option value="120">120 次/秒</option>
-          <option value="160" selected>160 次/秒</option>
+          <option value="60">60 updates/second</option>
+          <option value="120">120 updates/second</option>
+          <option value="160" selected>160 updates/second</option>
         </select>
       </div>
-      <button id="benchmarkBtn" type="button" disabled>自动测试 10 秒</button>
+      <button id="benchmarkBtn" type="button" disabled>Run 10-Second Automated Test</button>
 
       <div id="status">Ready</div>
     </header>
@@ -168,6 +168,6 @@
       <div id="loadingText" style="color: white; font-size: 1.2em;">Loading...</div>
     </div>
 
-    <script type="module" src="window-level-width-02.js"></script>
+    <script type="module" src="window-level-width-single-thread.js"></script>
   </body>
 </html>

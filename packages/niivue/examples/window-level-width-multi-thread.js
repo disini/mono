@@ -186,7 +186,7 @@ async function initializeRenderWorker(canvas) {
   canvas.height = size.height
 
   const worker = new Worker(
-    new URL('./window-level-width-03.worker.js', import.meta.url),
+    new URL('./window-level-width-multi-thread.worker.js', import.meta.url),
     { type: 'module' },
   )
   renderWorker = worker
@@ -464,7 +464,7 @@ function startBenchmark() {
   benchmarkRate.disabled = true
   windowUpdateStats = createWindowUpdateStats()
   renderWorker?.postMessage({ type: 'resetCallbackTiming' })
-  benchmarkBtn.textContent = '停止测试'
+  benchmarkBtn.textContent = 'Stop Test'
   const tick = () => {
     if (!benchmark) return
     const elapsed = performance.now() - benchmark.startedAt
@@ -508,7 +508,7 @@ function stopBenchmark() {
   widthSlider.value = benchmark.width
   benchmark = null
   benchmarkRate.disabled = false
-  benchmarkBtn.textContent = '自动测试 10 秒'
+  benchmarkBtn.textContent = 'Run 10-Second Automated Test'
   updateSliderValues()
   applyWindow()
 }
@@ -563,7 +563,7 @@ callbackProbeBtn.addEventListener('click', () => {
   callbackProbeRunning = true
   callbackProbeDisturbed = document.hidden
   callbackProbeBtn.disabled = true
-  callbackProbeBtn.textContent = '测量中，请保持页面可见…'
+  callbackProbeBtn.textContent = 'Measuring; keep this page visible...'
   void (async () => {
     try {
       const [mainThread, worker] = await Promise.all([
@@ -583,7 +583,7 @@ callbackProbeBtn.addEventListener('click', () => {
     } finally {
       callbackProbeRunning = false
       callbackProbeBtn.disabled = false
-      callbackProbeBtn.textContent = '对比线程回调 5 秒'
+      callbackProbeBtn.textContent = 'Compare Thread Callbacks for 5 Seconds'
     }
   })()
 })
